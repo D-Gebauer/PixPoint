@@ -11,9 +11,9 @@ import healpy as hp
 import numpy as np
 from scipy.special import binom
 
-from CosmoFuse.correlation_helpers import Q_crittenden
-from CosmoFuse.correlations import Integrated3PCF
-from CosmoFuse.pair_geometry import PairGeometry
+from pixpoint.correlation_helpers import Q_crittenden
+from pixpoint.correlations import Integrated3PCF
+from pixpoint.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -2626,9 +2626,9 @@ class TestCorrelationCoverage(unittest.TestCase):
         self.assertAlmostEqual(xip[1, 0, 0], expected)
         self.assertAlmostEqual(xim[1, 0, 0], expected)
 
-    @patch("CosmoFuse.correlations.Integrated3PCF.find_aperture_pairs")
-    @patch("CosmoFuse.correlations.Integrated3PCF.find_pairs")
-    @patch("CosmoFuse.correlations.Integrated3PCF.prepare")
+    @patch("pixpoint.correlations.Integrated3PCF.find_aperture_pairs")
+    @patch("pixpoint.correlations.Integrated3PCF.find_pairs")
+    @patch("pixpoint.correlations.Integrated3PCF.prepare")
     def test_preprocess_forwarding(
         self, mock_prepare, mock_find_pairs, mock_find_aperture_pairs
     ):
@@ -3224,7 +3224,7 @@ class TestCorrelationCoverage(unittest.TestCase):
         try:
             # get_backend imports cupy when called, so the fake is picked up
             # without reloading the package.
-            module = importlib.import_module("CosmoFuse.backend")
+            module = importlib.import_module("pixpoint.backend")
 
             corr = Integrated3PCF(
                 nside=self.nside,

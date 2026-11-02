@@ -1,6 +1,6 @@
 """Global2PCF precompute: find_pairs / prepare / load_pairs, and what they build.
 
-Run once per CosmoFuse tree (``PYTHONPATH=<tree>/src``) on the same machine;
+Run once per PixPoint tree (``PYTHONPATH=<tree>/src``) on the same machine;
 the JSON records the timings *and* a hash of the whole device state and of
 the ``gg`` output, so two trees can be compared for speed and for bitwise
 identity in one go::
@@ -23,8 +23,8 @@ import warnings
 import healpy as hp
 import numpy as np
 
-import CosmoFuse
-from CosmoFuse import Global2PCF
+import pixpoint
+from pixpoint import Global2PCF
 
 
 def _sync():
@@ -107,8 +107,8 @@ def main():
         pack_pairs=True,
     )
     rep = {
-        "cosmofuse": CosmoFuse.__version__,
-        "tree": os.path.dirname(os.path.dirname(CosmoFuse.__file__)),
+        "pixpoint": pixpoint.__version__,
+        "tree": os.path.dirname(os.path.dirname(pixpoint.__file__)),
         "nside": args.nside,
         "resolution_factor": args.resolution_factor,
         "n_active": int(mask.sum()),

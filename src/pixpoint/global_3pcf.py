@@ -30,12 +30,12 @@ bins is the ratio of the angle-binned sums,
     c_n^k = (1/2pi) int_{bin k} exp(-i n phi) dphi,
 
 which converges to the brute-force binned estimator as ``n_max`` grows
-(:meth:`~CosmoFuse.results.ThreePointResult.binned`).  Spin-2 values are reported
+(:meth:`~pixpoint.results.ThreePointResult.binned`).  Spin-2 values are reported
 in the x-projection; a theory prediction is converted to it per triangle.
 
 Algorithm
 ---------
-Step 1 (per centre, per radial bin; :mod:`CosmoFuse.backend.threepoint`)
+Step 1 (per centre, per radial bin; :mod:`pixpoint.backend.threepoint`)
     ``G_m(b; X1) = sum_{X2 in b} w2 f2~ exp(-i m phi_2)`` for
     ``m = -(n_max+2) .. n_max+2`` and the pair products that remove the
     degenerate ``X2 = X3`` terms (only the ``(sigma, type)`` products the
@@ -45,8 +45,8 @@ Step 2 (contraction over centres, batched matrix products)
     projection phase ``exp(-2i phi_2)`` is absorbed into the first leg).
 
 Both steps run on the backend device.  Pairs are *ordered* and owned by their
-centre's tile (see :mod:`CosmoFuse.global_geometry`); the pairs are found and
-uploaded once and reused for every map, like every other CosmoFuse estimator.
+centre's tile (see :mod:`pixpoint.global_geometry`); the pairs are found and
+uploaded once and reused for every map, like every other PixPoint estimator.
 
 Scope
 -----
@@ -85,7 +85,9 @@ from .multi_device import (
 from .results import Component, ThreePointResult
 from .utils import live_object_serial, pixel2RaDec
 
-FORMAT_KIND = "CosmoFuse.Global3PCF"
+FORMAT_KIND = "pixpoint.Global3PCF"
+# the name the files carried before the 8.0.0 rename; still read
+_OLD_FORMAT_KINDS = ("CosmoFuse.Global3PCF",)
 FORMAT_VERSION = 1
 
 _FLOATS = {"float32": np.float32, "float64": np.float64}
@@ -439,11 +441,12 @@ class Global3PCF:
         """Read a file written by :meth:`save_pairs` (must match this
         estimator's nside, bins, mask and tiles) and prepare it."""
         with h5py.File(filepath, "r") as fp:
-            if fp.attrs.get("kind", None) != FORMAT_KIND:
+            kind = fp.attrs.get("kind", None)
+            if kind != FORMAT_KIND and kind not in _OLD_FORMAT_KINDS:
                 raise ValueError(f"{filepath} is not a Global3PCF pair file")
             if int(fp.attrs["format_version"]) > FORMAT_VERSION:
                 raise ValueError(
-                    f"{filepath}: newer Global3PCF format; update CosmoFuse"
+                    f"{filepath}: newer Global3PCF format; update PixPoint"
                 )
             for name, got, want in (
                 ("nside", int(fp.attrs["nside"]), self.nside),

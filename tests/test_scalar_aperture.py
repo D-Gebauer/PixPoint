@@ -19,14 +19,14 @@ from unittest.mock import patch
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import (
+from pixpoint import (
     Q_crittenden,
     Q_schneider,
     U_crittenden,
     U_schneider,
     U_tophat,
 )
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 NSIDE = 64
 THETA_Q = 120.0

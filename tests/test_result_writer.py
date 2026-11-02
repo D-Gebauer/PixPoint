@@ -17,8 +17,8 @@ import h5py
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import OnePoint, OnePointWriter, ResultWriter, result_arrays
-from CosmoFuse.results import TwoPointResult
+from pixpoint import OnePoint, OnePointWriter, ResultWriter, result_arrays
+from pixpoint.results import TwoPointResult
 
 NSIDE = 32
 NPIX = hp.nside2npix(NSIDE)
@@ -81,7 +81,7 @@ class TestOnePointWriter(WriterBase):
             self.assertEqual(int(f.attrs["nside"]), NSIDE)
             self.assertEqual(f.attrs["estimator"], "OnePoint")
             self.assertEqual(f.attrs["aperture_filter"], "Q_crittenden")
-            self.assertIn("cosmofuse_version", f.attrs)
+            self.assertIn("pixpoint_version", f.attrs)
             # a sum streamed row by row adds up to the summed result
             total = sum(self.results[1:], self.results[0])
             np.testing.assert_array_equal(

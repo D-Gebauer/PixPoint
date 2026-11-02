@@ -53,8 +53,8 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    from CosmoFuse import Integrated3PCF, U_crittenden
-    from CosmoFuse.utils import select_patch_centers
+    from pixpoint import Integrated3PCF, U_crittenden
+    from pixpoint.utils import select_patch_centers
 
     gpu = args.device == "gpu"
     if gpu:

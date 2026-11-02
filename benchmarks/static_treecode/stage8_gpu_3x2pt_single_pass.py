@@ -14,7 +14,7 @@ import json
 
 import numpy as np
 
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 from stage7_gpu_tiles import PAIRS_2048, geometry, make_maps, sync, timed, MASK
 
 import healpy as hp

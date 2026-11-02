@@ -23,7 +23,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from CosmoFuse import Integrated3PCF
+from pixpoint import Integrated3PCF
 
 from ._results import fields_of
 from .test_degrade_kernel import FusedDegradeBase, make_corr

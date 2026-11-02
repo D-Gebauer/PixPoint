@@ -19,7 +19,7 @@ import healpy as hp
 import numpy as np
 import pytest
 
-from CosmoFuse import Integrated3PCF
+from pixpoint import Integrated3PCF
 
 from ._results import fields_of
 from .cuda_emulation import LAUNCH_LOG

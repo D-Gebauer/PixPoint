@@ -8,7 +8,7 @@ import unittest
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Integrated3PCF, MapFileLoader
+from pixpoint import Integrated3PCF, MapFileLoader
 
 from ._results import fields_of
 
@@ -156,7 +156,7 @@ class TestMapFileLoader(unittest.TestCase):
         """Same hazard in the two-slot MapLoader."""
         from types import SimpleNamespace
 
-        from CosmoFuse import MapLoader
+        from pixpoint import MapLoader
 
         from . import cuda_stream_sim as sim
 

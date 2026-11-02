@@ -18,9 +18,9 @@ import unittest
 
 import numpy as np
 
-from CosmoFuse.correlation_helpers import Q_crittenden, Q_schneider
-from CosmoFuse.pair_geometry import PairGeometry
-from CosmoFuse.utils import live_object_serial
+from pixpoint.correlation_helpers import Q_crittenden, Q_schneider
+from pixpoint.pair_geometry import PairGeometry
+from pixpoint.utils import live_object_serial
 
 
 class TestLiveObjectSerial(unittest.TestCase):
@@ -43,7 +43,7 @@ class TestLiveObjectSerial(unittest.TestCase):
         self.assertEqual(live_object_serial(obj), live_object_serial(obj))
 
     def test_keeps_nothing_alive(self):
-        from CosmoFuse.utils import _OBJECT_SERIALS
+        from pixpoint.utils import _OBJECT_SERIALS
 
         obj = np.zeros(3)
         live_object_serial(obj)
@@ -90,7 +90,7 @@ class TestApertureFilterKey(unittest.TestCase):
 
 
 def _small_cpu_corr():
-    from CosmoFuse.correlations import Integrated3PCF
+    from pixpoint.correlations import Integrated3PCF
 
     corr = Integrated3PCF(
         nside=1,
@@ -140,7 +140,7 @@ class TestFrozenWeightFingerprint(unittest.TestCase):
         self.assertNotEqual(fingerprints[0], fingerprints[1])
 
     def test_the_same_frozen_array_still_hits_the_memo(self):
-        from CosmoFuse import correlations as correlations_module
+        from pixpoint import correlations as correlations_module
 
         weights = np.arange(64, dtype=np.float64)
         weights.flags.writeable = False
@@ -152,7 +152,7 @@ class TestFrozenWeightFingerprint(unittest.TestCase):
         self.assertEqual(len(correlations_module._FINGERPRINT_MEMO), len(before))
 
     def test_the_memo_pins_nothing(self):
-        from CosmoFuse import correlations as correlations_module
+        from pixpoint import correlations as correlations_module
 
         weights = np.arange(64, dtype=np.float64)
         weights.flags.writeable = False
@@ -226,13 +226,13 @@ class TestCombinationLayoutCache(unittest.TestCase):
     """
 
     def setUp(self):
-        from CosmoFuse.backend.combinations import _COMBINATION_LAYOUT_CACHE
+        from pixpoint.backend.combinations import _COMBINATION_LAYOUT_CACHE
 
         _COMBINATION_LAYOUT_CACHE.clear()
 
     @staticmethod
     def _layout(selection, n1, n2):
-        from CosmoFuse.backend.combinations import _combination_layout
+        from pixpoint.backend.combinations import _combination_layout
 
         comb_i = np.asarray([a for a, _ in selection], dtype=np.int32)
         comb_j = np.asarray([b for _, b in selection], dtype=np.int32)
@@ -245,14 +245,14 @@ class TestCombinationLayoutCache(unittest.TestCase):
 
         truths = {}
         for name, selection in (("first", first), ("second", second)):
-            from CosmoFuse.backend.combinations import _COMBINATION_LAYOUT_CACHE
+            from pixpoint.backend.combinations import _COMBINATION_LAYOUT_CACHE
 
             _COMBINATION_LAYOUT_CACHE.clear()
             layout, _ = self._layout(selection, 3, 3)
             truths[name] = np.asarray(layout.rows).copy()
         self.assertFalse(np.array_equal(truths["first"], truths["second"]))
 
-        from CosmoFuse.backend.combinations import _COMBINATION_LAYOUT_CACHE
+        from pixpoint.backend.combinations import _COMBINATION_LAYOUT_CACHE
 
         _COMBINATION_LAYOUT_CACHE.clear()
         for i in range(400):
@@ -265,7 +265,7 @@ class TestCombinationLayoutCache(unittest.TestCase):
             )
 
     def test_the_same_arrays_still_hit(self):
-        from CosmoFuse.backend.combinations import (
+        from pixpoint.backend.combinations import (
             _COMBINATION_LAYOUT_CACHE,
             _combination_layout,
         )

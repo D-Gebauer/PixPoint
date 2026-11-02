@@ -23,19 +23,19 @@ from pathlib import Path
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Q_schneider, U_crittenden
-from CosmoFuse.backend.aperture import (
+from pixpoint import Q_schneider, U_crittenden
+from pixpoint.backend.aperture import (
     _build_cupy_aperture_tomo_density_kernel,
     _build_cupy_aperture_tomo_shear_kernel,
 )
-from CosmoFuse.backend.degrade import _build_cupy_degrade_rows_kernel
-from CosmoFuse.backend.density import (
+from pixpoint.backend.degrade import _build_cupy_degrade_rows_kernel
+from pixpoint.backend.density import (
     _build_cupy_density_density_tomo_packed_kernel,
     _build_cupy_density_density_tomo_vectorized_kernel,
     _build_cupy_density_shear_tomo_packed_kernel,
     _build_cupy_density_shear_tomo_vectorized_kernel,
 )
-from CosmoFuse.backend.moments import (
+from pixpoint.backend.moments import (
     _build_cupy_3x2pt_aperture_moments_kernel,
     _build_cupy_3x2pt_moment_kernel,
     _build_cupy_aperture_moments_kernels,
@@ -43,15 +43,15 @@ from CosmoFuse.backend.moments import (
     _build_cupy_moment_level_kernel,
     _build_cupy_xipm_moment_kernels,
 )
-from CosmoFuse.backend.shear import (
+from pixpoint.backend.shear import (
     _build_cupy_tomo_packed_kernel,
     _build_cupy_tomo_vectorized_kernel,
 )
-from CosmoFuse.backend.three_by_two import (
+from pixpoint.backend.three_by_two import (
     _build_cupy_3x2pt_tomo_aperture_kernel,
     _build_cupy_3x2pt_tomo_pairs_kernel,
 )
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 from ._results import fields_of
 from .cuda_emulation import LAUNCH_LOG, EmulatedCupyModule

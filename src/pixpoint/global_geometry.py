@@ -1,11 +1,11 @@
 """
 Tiles and the footprint-wide pair search of the global estimators.
 
-The patch estimator (:class:`~CosmoFuse.correlations.Integrated3PCF`) finds
+The patch estimator (:class:`~pixpoint.correlations.Integrated3PCF`) finds
 the pairs *inside* every patch disc; a pair enters once per patch that holds
 both of its ends.  The global estimators instead need every pair of the
-footprint exactly once (:class:`~CosmoFuse.global_2pcf.Global2PCF`) or every
-ordered pair exactly once (:class:`~CosmoFuse.global_3pcf.Global3PCF`).  They
+footprint exactly once (:class:`~pixpoint.global_2pcf.Global2PCF`) or every
+ordered pair exactly once (:class:`~pixpoint.global_3pcf.Global3PCF`).  They
 are found **per tile**:
 
 * a tile is a HEALPix pixel at ``tile_nside`` (NESTED id); its *core* is the
@@ -20,14 +20,14 @@ are found **per tile**:
 
 Tiles are HEALPix-aligned, so as long as ``tile_nside`` does not exceed the
 coarsest treecode level every coarse cell lies inside one tile, and the
-per-tile cells built by :func:`~CosmoFuse.treecode.build_patch_cells` are the
+per-tile cells built by :func:`~pixpoint.treecode.build_patch_cells` are the
 global cells.
 
 Angles follow the patch pair finder exactly: ``phi`` is the position angle of
 the other point measured at a point from local east towards local north (the
 frame of the shear components).  The unordered search returns the rotation
 factors ``e^{2i phi}`` of both ends with the same arithmetic as
-:func:`CosmoFuse.correlations._compute_pairs_impl`; the ordered search
+:func:`pixpoint.correlations._compute_pairs_impl`; the ordered search
 returns the *full* angles (needed for odd multipoles) at both ends.
 """
 

@@ -26,7 +26,7 @@ from typing import Any, Collection, Dict, NoReturn, Optional, Sequence, Tuple
 import numpy as np
 import numpy.typing as npt
 
-logger = logging.getLogger("CosmoFuse.backend")
+logger = logging.getLogger("pixpoint.backend")
 
 # --std is mandatory: NVRTC refuses to instantiate name_expressions
 # (C++ templates) without an explicit standard.

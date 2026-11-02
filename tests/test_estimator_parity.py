@@ -18,7 +18,7 @@ import healpy as hp
 import numpy as np
 import pytest
 
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 from ._results import fields_of
 
@@ -258,7 +258,7 @@ class TestCombinationAccessors(unittest.TestCase):
         self.assertEqual(ncomb, len(selection))
 
     def test_zeta_triplets_match_the_reduction(self):
-        from CosmoFuse.correlation_helpers import _get_pair_index, _triplet_indices
+        from pixpoint.correlation_helpers import _get_pair_index, _triplet_indices
 
         for nzbins in (1, 2, 4):
             indices = _triplet_indices(nzbins)

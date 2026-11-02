@@ -38,7 +38,7 @@ def fields_of(result, *names):
 
 MAP_DIR = "/e/ocean1/users/dgebauer/sbi/shear_maps/grid_baryonified/4BINS/"
 W_FILE = "/e/ocean1/users/dgebauer/sbi/shear_maps/SumOfWeights_512.npy"
-CENTER_DIR = "/e/ocean1/users/dgebauer/sbi/CosmoFuse/Q{r}/"
+CENTER_DIR = "/e/ocean1/users/dgebauer/sbi/pixpoint/Q{r}/"
 MASK_FILE = "~/research/lfi/local/DESY3_Mask.fits"
 EL9_MASK_FILE = (
     "/project/ocean1-seitz/users/dgebauer/research/CosmoFuse-treecode-data/DESY3_Mask.fits"
@@ -74,7 +74,7 @@ def _tag(args, k, aperture_nside):
 
 
 def build_correlation(args, resolution_factor, aperture_nside=None):
-    from CosmoFuse import Integrated3PCF
+    from pixpoint import Integrated3PCF
 
     mask = hp.ud_grade(hp.read_map(_path(MASK_FILE)), NSIDE)
     map_inds = np.where(mask != 0)[0]

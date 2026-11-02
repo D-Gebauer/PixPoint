@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from CosmoFuse.backend import get_backend
-from CosmoFuse.pipeline import MapLoader
+from pixpoint.backend import get_backend
+from pixpoint.pipeline import MapLoader
 
 
 class TestMapLoaderCPU(unittest.TestCase):

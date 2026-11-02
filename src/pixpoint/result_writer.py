@@ -25,11 +25,11 @@ groups.  Both numpy and h5py release the GIL for the bulk of their work, so
 the thread genuinely overlaps with the next map's kernels.
 
 The subclasses add the per-estimator shape:
-:class:`~CosmoFuse.zeta_writer.ZetaWriter` (``Integrated3PCF``: the zeta
+:class:`~pixpoint.zeta_writer.ZetaWriter` (``Integrated3PCF``: the zeta
 reduction, or the raw per-patch arrays) and :class:`OnePointWriter`
 (``OnePoint``: the histogram and moment sums).  A
-:class:`~CosmoFuse.results.TwoPointResult` or
-:class:`~CosmoFuse.results.ThreePointResult` needs no subclass -- submit
+:class:`~pixpoint.results.TwoPointResult` or
+:class:`~pixpoint.results.ThreePointResult` needs no subclass -- submit
 :func:`result_arrays` of it to a plain ``ResultWriter``.
 
 SWMR (``swmr=True``) lets another process follow the file while it grows,
@@ -382,7 +382,7 @@ class ResultWriter:
         """
         from . import __version__
 
-        out: Dict[str, Any] = {"cosmofuse_version": __version__}
+        out: Dict[str, Any] = {"pixpoint_version": __version__}
         own = getattr(type(estimator), "provenance", None)
         if isinstance(own, property):
             out.update(estimator.provenance)
@@ -406,14 +406,14 @@ class ResultWriter:
 
 
 class OnePointWriter(ResultWriter):
-    """Stream :class:`~CosmoFuse.results.OnePointResult` objects to HDF5.
+    """Stream :class:`~pixpoint.results.OnePointResult` objects to HDF5.
 
     One row per map under the group ``onepoint``: ``n_apertures``, and per
     field ``count/<name>``, ``power_sums/<name>``, ``cross_sums/<name>/<key>``
     (non-empty keys), with edges also ``hist/<name>``, ``underflow/<name>``,
     ``overflow/<name>``, and with ``values=True`` results ``values/<name>/<s>``
     per scale.  Written once: ``constants/scales``, ``constants/edges``, the
-    estimator's :attr:`~CosmoFuse.onepoint.OnePoint.provenance`, ``names``,
+    estimator's :attr:`~pixpoint.onepoint.OnePoint.provenance`, ``names``,
     ``statistic`` and ``cross_index`` (JSON) as attributes.  The first result
     fixes the layout; every later one must match it.
     """

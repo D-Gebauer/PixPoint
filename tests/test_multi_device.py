@@ -11,8 +11,8 @@ import unittest
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Integrated3PCF
-from CosmoFuse.multi_device import MultiDeviceIntegrated3PCF
+from pixpoint import Integrated3PCF
+from pixpoint.multi_device import MultiDeviceIntegrated3PCF
 
 from ._results import fields_of
 

@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-fast coverage lint format clean build
+.PHONY: help install install-dev test test-fast coverage lint format clean build docs
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -17,7 +17,7 @@ test-fast: ## Run the fast local loop (no GPU, no slow exactness gates)
 	pytest tests/ -m "not gpu and not slow" -q
 
 coverage: ## Run the CI selection with coverage reports
-	pytest tests/ -m "not gpu" --cov=CosmoFuse --cov-report=term-missing --cov-report=html --cov-report=xml
+	pytest tests/ -m "not gpu" --cov=pixpoint --cov-report=term-missing --cov-report=html --cov-report=xml
 
 test-env: ## Run tests in a uv venv under ~/.venvs (usage: make test-env ENV=cosmo)
 	$(HOME)/.venvs/$(ENV)/bin/python -m pytest tests/ -v
@@ -56,3 +56,6 @@ format: ## Apply formatting
 
 build: ## Build the package
 	python -m build
+
+docs: ## Build the documentation (requires the docs extras)
+	sphinx-build -W --keep-going -b html docs docs/_build/html

@@ -1,5 +1,5 @@
 """
-CosmoFuse: GPU/CPU measurement of integrated, two- and three-point correlations.
+PixPoint: GPU/CPU measurement of integrated, two- and three-point correlations.
 
 Three estimators on HEALPix maps, named after the statistic they deliver:
 :class:`Integrated3PCF` (per-patch aperture masses and 2PCFs, the i3PCF

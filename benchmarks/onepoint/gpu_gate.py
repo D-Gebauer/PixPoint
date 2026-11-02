@@ -15,7 +15,7 @@ import sys
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import OnePoint, U_crittenden
+from pixpoint import OnePoint, U_crittenden
 
 NSIDE = 128
 NPIX = hp.nside2npix(NSIDE)

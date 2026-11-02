@@ -1,7 +1,7 @@
-# CosmoFuse → PixPoint 8.0.0 — implementation guide
+# PixPoint → PixPoint 8.0.0 — implementation guide
 
 Working document for the 8.0.0 release. It replaces nothing: the planned-improvements
-list (`~/Downloads/cosmofuse-8.0-improvements.md`) keeps the roadmap (docs, PyPI,
+list (`~/Downloads/pixpoint-8.0-improvements.md`) keeps the roadmap (docs, PyPI,
 webpage follow 8.0.0); this file is the engineering plan for the release itself.
 Like `GPU_IMPLEMENTATION_GUIDE.md` and `STATIC_TREECODE_GUIDE.md` before it, it is
 deleted once every stage is done; the science caveats that outlive the code move
@@ -79,7 +79,7 @@ exact pixel-pair estimator.
 
 ### A1. `ThreePointResult.to_centroid()` — done 2026-11-02
 
-- Delete `to_centroid` (`src/CosmoFuse/results.py:321`) and `_phi_coefficients` if it has no
+- Delete `to_centroid` (`src/pixpoint/results.py:321`) and `_phi_coefficients` if it has no
   other caller after that; delete `TestGlobal3PCF.test_centroid_is_a_phase`
   (`tests/test_global_3pcf.py:306`).
 - Remove the mentions in `global_3pcf.py:33`, README (`to_centroid` example at ~459 and the
@@ -169,7 +169,7 @@ and the moment tiles overwrite the coarse bins afterwards (`mom_base[b] < 0` mar
 bin) — a per-bin skip in the plain tiles is the B5 optimisation if the ~15 % plain work on
 coarse pairs shows; the per-(bin,row) fallbacks refuse moments with a message; (B2.6) S = −1
 on the kernel rows (`moments.MOMENT_SIGN`), fixed by `tests/test_cell_moments.py::
-TestConventions`; (B2.8) aperture moments need no weight moments: CosmoFuse normalises by
+TestConventions`; (B2.8) aperture moments need no weight moments: PixPoint normalises by
 Σw without the filter, so only the numerator expands (`moments.aperture_shear_terms`,
 `aperture_scalar_terms`); the moment aperture kernels have only the one-block-per-patch form
 (≤ 16 bins). Gates B4.1–B4.7 are `tests/test_cell_moments.py` (C1–C6 + a GPU class).
@@ -263,7 +263,7 @@ information fix, offered because it is 1.6× instead of 2.2–2.9× the kernel c
    `_MAX_TILED_ACCUMULATORS`) refuse `cell_moments` with a clear error rather than growing
    a third variant. `cell_moments` therefore means the same thing for every pair statistic
    of `Integrated3PCF` and `Global2PCF`.
-6. **Sign convention.** The probe's S = +1 on the unflipped shear matches CosmoFuse
+6. **Sign convention.** The probe's S = +1 on the unflipped shear matches PixPoint
    `flip_g1=True`. Derive S once from the kernel's rotation convention on the *signed* rows
    (the fold happens in the degrade), and gate it (B4.2) — do not carry S as a user option.
 7. **Defaults (decided, see § 0).** `cell_moments="quad"`: inert at the full-resolution
@@ -410,7 +410,7 @@ treecode estimator, identical for data and simulations (see the science caveats)
 
 ## Stage D — 1-point statistics: `OnePoint` — implemented 2026-11-02 (D4 measurements pending)
 
-**Implementation record** (what shipped vs. the plan below; `src/CosmoFuse/onepoint.py`,
+**Implementation record** (what shipped vs. the plan below; `src/pixpoint/onepoint.py`,
 `OnePointResult` in `results.py`, gates `tests/test_onepoint.py`, 18 tests):
 
 - D1/D2.1 as planned: `OnePoint(nside, mask, scales, *, centre_nside, aperture_nside,
@@ -528,34 +528,30 @@ and the same for the HEALPix top hat vs the circular one. Cross-check one config
 against PDFast's top-hat κ PDF (same κ maps) — expect differences from the mask-edge
 treatment, quantify them.
 
-## Stage E — rename to PixPoint
+## Stage E — rename to PixPoint — done 2026-11-03
 
-Do this in one commit after D is merged and green.
+`src/pixpoint/`, distribution `pixpoint`, `from pixpoint import ...`; no alias package. HDF5
+`kind` strings are `pixpoint.Global2PCF` / `pixpoint.Global3PCF`, the old ones are still read
+(`_OLD_FORMAT_KINDS`); writers store `pixpoint_version`. Historical CHANGELOG entries and the
+benchmark result files keep the old name; the el9 path `CosmoFuse-static-treecode` and the data
+path `CosmoFuse-treecode-data` are unchanged. GitHub repo renamed to `D-Gebauer/PixPoint`
+(redirects), description/topics/homepage updated. **Not renamed:** the local checkout directory
+(and with it the project `CLAUDE.md` path and the memory path) — the user does that last, per the
+roadmap.
 
-- `src/CosmoFuse/` → `src/pixpoint/`; every `from CosmoFuse` / `import CosmoFuse` in `src`,
-  `tests` (incl. `tests/_results.py`, `cuda_emulation.py`), `benchmarks/**`, `Makefile`,
-  `.github/workflows/ci.yml` (`--cov=CosmoFuse`), `pyproject.toml` (`name = "pixpoint"`,
-  `[tool.setuptools.package-data] "pixpoint"`, URLs → `D-Gebauer/PixPoint`,
-  `pixpoint.readthedocs.io`), `README.md`, `CLAUDE.md`, `docs/estimator_note.md`.
-- `__version__ = "8.0.0"` in `src/pixpoint/__init__.py` and `pyproject.toml`.
-- HDF5: `FORMAT_KIND = "PixPoint.Global2PCF" / "PixPoint.Global3PCF"`; `load_pairs` accepts the
-  `CosmoFuse.*` strings too (test: a 7.7 file loads). Provenance attrs written by `ZetaWriter`
-  that carry the package name (version key) — write the new name, read both.
-- Remove the stale `src/cosmofuse.egg-info/` (and make sure `.gitignore` covers egg-info).
-- Rename the GitHub repo (redirect), then the local checkout directory, `CLAUDE.md` path
-  references (`benchmarks/static_treecode/deploy_el9.sh` destination
-  `/project/ocean1-seitz/users/dgebauer/research/CosmoFuse-static-treecode` → `PixPoint-…`),
-  and the auto-memory directory last (its name is derived from the checkout path).
-- Downstream, outside this repo (note in the CHANGELOG, fix when they next pin):
-  OptimSBI's `optimsbi.external.cosmofuse_v7`; Perlmutter venvs `~/.venvs/cosmofuse`
-  (6.4) and `~/.venvs/cosmofuse7` (7.7) keep their pins — a `pixpoint` venv comes with the
-  first project that moves; the paper repo pins a release and converts with it.
-- No `CosmoFuse` alias package.
+**Docs (added to 8.0.0 at the user's request, 2026-11-03):** Sphinx + MyST + furo under `docs/`
+(`make docs`, `-W`), `.readthedocs.yaml`, a docs job in CI; pages for cosmologists first
+(quickstart, concepts, Global2PCF as the main entry, Global3PCF, Integrated3PCF, OnePoint,
+treecode, performance in plain terms, io, conventions), the estimator note, autodoc API reference,
+changelog, citing (references checked against arXiv), contributing. Community files:
+CONTRIBUTING.md, CODE_OF_CONDUCT.md (Contributor Covenant 2.1), SECURITY.md, CITATION.cff,
+issue templates, PR template. README rewritten around Global2PCF. **User step:** create the
+Read the Docs project (import the GitHub repo, name `pixpoint`) so the badge and URLs resolve.
 
 ## Stage F — release
 
 - `CHANGELOG.md` 8.0.0 entry in the 7.0.0 style: **Breaking** paragraph, before/after table
-  (`import CosmoFuse` → `import pixpoint`; `TwoPointResult.tile_num/jackknife` → `num`;
+  (`import pixpoint` → `import pixpoint`; `TwoPointResult.tile_num/jackknife` → `num`;
   `to_centroid` → docs recipe; `kind` strings), then one block per feature (B, C, D) with the
   measured numbers, then "unchanged": `resolution_factor=None` bitwise vs 4.20.0,
   `Global3PCF` untouched by B–D (full resolution only).

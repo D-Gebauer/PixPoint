@@ -21,15 +21,15 @@ import unittest
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import (
+from pixpoint import (
     Integrated3PCF,
     OnePoint,
     OnePointResult,
     Q_crittenden,
     U_crittenden,
 )
-from CosmoFuse.onepoint import default_centre_nside, footprint_centres
-from CosmoFuse.results import onepoint_cross_index
+from pixpoint.onepoint import default_centre_nside, footprint_centres
+from pixpoint.results import onepoint_cross_index
 
 from .test_gpu_kernel_emulation import emulated_gpu
 

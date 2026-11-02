@@ -1,5 +1,5 @@
 /*
- * common.cuh -- Shared CUDA utilities for CosmoFuse correlation kernels.
+ * common.cuh -- Shared CUDA utilities for PixPoint correlation kernels.
  *
  * Provides thread-block level parallel reductions used to sum per-pair
  * contributions (e.g. weighted shear products, density products) across

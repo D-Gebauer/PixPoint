@@ -8,7 +8,7 @@
 """
 import argparse, gc, json, time
 import h5py, healpy as hp, numpy as np
-from CosmoFuse import Integrated3PCF
+from pixpoint import Integrated3PCF
 
 
 def fields_of(result, *names):
@@ -43,11 +43,11 @@ def timed(corr, g, w, n=8):
 def geo512():
     nside = 512
     des_map = hp.ud_grade(hp.read_map(MASK), nside)
-    pair_file = f"{SBI}/CosmoFuse/Q110/2PCF_pairs_512_15_250_8.h5"
+    pair_file = f"{SBI}/pixpoint/Q110/2PCF_pairs_512_15_250_8.h5"
     with h5py.File(pair_file, "r") as fp:
         attrs = dict(fp.attrs)
-    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_theta.dat")
     geo = dict(nbins=int(attrs["nbins"]), theta_min=float(np.degrees(attrs["theta_min"]) * 60),
                theta_max=float(np.degrees(attrs["theta_max"]) * 60), patch_size=110., theta_Q=110., mask=des_map)
     return nside, phi, theta, geo, pair_file

@@ -21,8 +21,8 @@ import time
 import healpy as hp
 import numpy as np
 
-from CosmoFuse.correlations import Integrated3PCF
-from CosmoFuse.utils import select_patch_centers
+from pixpoint.correlations import Integrated3PCF
+from pixpoint.utils import select_patch_centers
 
 MASK = "/home/david/Documents/research/PDFast/data/DESY3_Mask.fits"
 

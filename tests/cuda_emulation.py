@@ -1,10 +1,10 @@
 """NumPy emulation of the CUDA RawKernel launch contracts.
 
-Each emulator mirrors one ``__global__`` kernel in ``src/CosmoFuse/cuda/``:
+Each emulator mirrors one ``__global__`` kernel in ``src/pixpoint/cuda/``:
 same template parameters (parsed from the name expression), same launch
 signature ``(grid, block, args)``, same flat index arithmetic, and the same
 output layout.  ``EmulatedCupyModule`` duck-types the parts of cupy that the
-``_build_cupy_*`` wrapper builders in ``CosmoFuse.backend`` touch, so the
+``_build_cupy_*`` wrapper builders in ``pixpoint.backend`` touch, so the
 *real* wrappers and the *real* GPU orchestrator branches in
 ``correlations.py`` can run end-to-end on a CPU-only machine and be compared
 against the independently implemented (treecorr-validated) CPU Numba
@@ -1274,13 +1274,13 @@ def _emulate_3pcf_multipoles(params, grid, args):
 
 # ── Moment-carrying cells ───────────────────────────────────────────────────
 # Twins of moment_rows.cu and of the *_mom tiles (pair_tiles.cuh), written on
-# the float64 reference arithmetic of CosmoFuse.moments (the kernels compute
+# the float64 reference arithmetic of pixpoint.moments (the kernels compute
 # at the map type; identical for float64 maps, 1e-7-level for float32).
 
 
 def _emulate_moment_level(params, grid, args):
     """moment_rows.cu :: gpu_moment_level<TSRC, QT, TOUT, KIND, NM, SEG>."""
-    from CosmoFuse.moments import cell_moments_numpy, moment_factors
+    from pixpoint.moments import cell_moments_numpy, moment_factors
 
     kind, nm, seg = int(params[3]), int(params[4]), int(params[5])
     (
@@ -1387,7 +1387,7 @@ def _tile_xipm_mom(
     nbins_total,
     bin_flat,
 ):
-    from CosmoFuse.moments import xipm_pair_terms
+    from pixpoint.moments import xipm_pair_terms
 
     idx_a, idx_b, phi_a, phi_b, inv_d = geom
     cell_a, cell_b = cells
@@ -1443,7 +1443,7 @@ def _tile_ds_mom(
     nbins_total,
     bin_flat,
 ):
-    from CosmoFuse.moments import gammat_pair_terms
+    from pixpoint.moments import gammat_pair_terms
 
     idx_a, idx_b, phi_a, phi_b, inv_d = geom
     cell_a, cell_b = cells
@@ -1802,7 +1802,7 @@ def _emulate_3x2pt_mom(packed):
 def _aperture_shear_mom(mom, cells, nz, m, psi, inv_theta, qv, qd, qdd, order):
     """Per disc entry, (npairs, nz): -Re(N e^{2i psi}) of aperture_shear_terms
     with the row buffer's transported mean as the monopole."""
-    from CosmoFuse.moments import aperture_shear_terms
+    from pixpoint.moments import aperture_shear_terms
 
     mc = _cell_moments(mom, cells, nz)  # (n, nz, NM) complex
     out = np.zeros((psi.size, nz))
@@ -1814,7 +1814,7 @@ def _aperture_shear_mom(mom, cells, nz, m, psi, inv_theta, qv, qd, qdd, order):
 
 
 def _aperture_scalar_mom(mom, cells, nz, m, psi, inv_theta, uv, ud, udd, order):
-    from CosmoFuse.moments import aperture_scalar_terms
+    from pixpoint.moments import aperture_scalar_terms
 
     mc = _cell_moments(mom, cells, nz)
     out = np.zeros((psi.size, nz))

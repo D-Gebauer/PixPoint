@@ -85,7 +85,7 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    from CosmoFuse import OnePoint
+    from pixpoint import OnePoint
 
     gpu = args.device == "gpu"
     if gpu:

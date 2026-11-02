@@ -3,7 +3,7 @@ then time shear with host row-space inputs, device inputs, and
 the individual phases.  Run under nsys for the kernel split."""
 import argparse, json, os, time
 import healpy as hp, numpy as np
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 
 def fields_of(result, *names):
@@ -24,8 +24,8 @@ def build(args):
     if hp.npix2nside(mask.size) != nside:
         mask = hp.ud_grade(mask.astype(np.float64), nside)
     mask = mask != 0
-    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q{args.Q}/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q{args.Q}/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/pixpoint/Q{args.Q}/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/pixpoint/Q{args.Q}/patch_center_original_theta.dat")
     edges = np.geomspace(args.theta_min, args.theta_max, args.nedges)
     edges = edges[edges < 2 * args.Q - 5]
     corr = Integrated3PCF(nside, phi, theta, nbins=len(edges) - 1, theta_min=edges[0], theta_max=edges[-1],

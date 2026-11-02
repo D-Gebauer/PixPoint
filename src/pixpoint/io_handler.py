@@ -17,12 +17,12 @@ class PairIOHandler:
     Format version 2 (written by :meth:`save_pairs`) stores consolidated
     flat datasets with per-patch offset arrays, so loading is a handful
     of bulk reads instead of ~8 small datasets per patch.  It is the
-    oldest version this CosmoFuse reads; version 1 (one HDF5 group per
+    oldest version this PixPoint reads; version 1 (one HDF5 group per
     patch) was dropped in 6.0.
 
     Format version 3 is written only when virtual rows exist (static
     treecode and/or a coarse aperture level).  Its index datasets use
-    *different names* (``tc_pair_inds``, ``tc_Q_inds``): CosmoFuse <= 4.20
+    *different names* (``tc_pair_inds``, ``tc_Q_inds``): PixPoint <= 4.20
     accepts any ``format_version >= 2`` and would otherwise read virtual-row
     ids as pixel ids (out-of-bounds gathers on the GPU); with the new names
     old readers fail with a ``KeyError`` instead.  Full-resolution files are
@@ -311,14 +311,14 @@ class PairIOHandler:
             if version > PairIOHandler.FORMAT_VERSION:
                 raise ValueError(
                     f"{filepath} has pair-file format version {version}; this "
-                    f"CosmoFuse reads versions <= {PairIOHandler.FORMAT_VERSION}. "
-                    "Update CosmoFuse."
+                    f"PixPoint reads versions <= {PairIOHandler.FORMAT_VERSION}. "
+                    "Update PixPoint."
                 )
             if version < PairIOHandler.MIN_FORMAT_VERSION:
                 raise ValueError(
                     f"{filepath} has pair-file format version {version} (one "
-                    "HDF5 group per patch), which CosmoFuse dropped in 6.0. "
-                    "Recompute the pairs, or convert the file with CosmoFuse "
+                    "HDF5 group per patch), which PixPoint dropped in 6.0. "
+                    "Recompute the pairs, or convert the file with PixPoint "
                     "5.x (load_pairs followed by save_pairs)."
                 )
             if stop_ind is None:

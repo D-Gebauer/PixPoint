@@ -6,7 +6,7 @@ binary-mask centroid carrying the weight sum and the weighted-mean shear
 of its members.  That is exactly what the degrade kernel produces, so the
 honest independent check is:
 
-    CosmoFuse(resolution_factor=k)  ==  TreeCorr run on those same cells.
+    PixPoint(resolution_factor=k)  ==  TreeCorr run on those same cells.
 
 Comparing a treecode measurement against TreeCorr at *full* resolution
 would be comparing two different estimators (T10 measured 20-40 %
@@ -25,8 +25,8 @@ import numpy as np
 import pytest
 import treecorr
 
-from CosmoFuse import Integrated3PCF
-from CosmoFuse.utils import pixel2RaDec
+from pixpoint import Integrated3PCF
+from pixpoint.utils import pixel2RaDec
 
 from ._results import fields_of
 from .test_gpu_kernel_emulation import emulated_gpu
@@ -73,7 +73,7 @@ class TestDegradedEstimatorAgainstTreeCorr(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.corr = build()
-        from CosmoFuse.treecode import level_groups
+        from pixpoint.treecode import level_groups
 
         cls.groups = level_groups(cls.corr.level_nside)
         coarse = [g for g in cls.groups if g[0] != NSIDE]
@@ -109,7 +109,7 @@ class TestDegradedEstimatorAgainstTreeCorr(unittest.TestCase):
         return np.asarray(g1), np.asarray(g2), np.asarray(w_rows)
 
     def _treecorr_xipm(self, g1, g2, w_rows):
-        """TreeCorr on whatever CosmoFuse pairs for each bin: the pixel rows
+        """TreeCorr on whatever PixPoint pairs for each bin: the pixel rows
         for a base-resolution group, that level's cells for a coarse one."""
         corr = self.corr
         tree = corr._treecode

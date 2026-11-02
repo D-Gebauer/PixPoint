@@ -7,12 +7,12 @@ pair once -- with the same precompute-once / measure-many workflow as the
 patch estimator:
 
 1. ``preprocess()`` finds the pairs once (per tile, see
-   :mod:`CosmoFuse.global_geometry`) and prepares them on the device;
+   :mod:`pixpoint.global_geometry`) and prepares them on the device;
 2. every measurement call runs the **same pair kernels** as
-   :class:`~CosmoFuse.correlations.Integrated3PCF` (CPU Numba and GPU
+   :class:`~pixpoint.correlations.Integrated3PCF` (CPU Numba and GPU
    tiled / packed CUDA kernels, static treecode, row space, sign flips),
    with tiles in the role of patches;
-3. the result (:class:`~CosmoFuse.results.TwoPointResult`) holds the
+3. the result (:class:`~pixpoint.results.TwoPointResult`) holds the
    numerators and weight sums over the whole footprint; the estimate is
    their ratio (ratio of sums, TreeCorr's definition).
 
@@ -56,7 +56,9 @@ from .results import TwoPointResult
 from .treecode import TreecodeGeometry, build_patch_cells, level_groups
 from .utils import pixel2RaDec
 
-FORMAT_KIND = "CosmoFuse.Global2PCF"
+FORMAT_KIND = "pixpoint.Global2PCF"
+# the name the files carried before the 8.0.0 rename; still read
+_OLD_FORMAT_KINDS = ("CosmoFuse.Global2PCF",)
 # Version 1: exact pairs (``pair_inds``/``pair_exp2phi``).  Version 2 is
 # written only for ``pack_host_pairs=True``: the packed payload instead.
 # Version 3 (8.0): exact pairs plus the moment geometry of the coarse-level
@@ -125,18 +127,19 @@ class Global2PCF:
             holds its share of the pairs and a copy of the maps.  Measurements
             then take host arrays and return host results, equal to a
             single-device run up to the order of the final add.
-        map_precision, rotation_precision, accumulation_precision,
-        resolution_factor, pair_search_precision, pack_pairs, fastmath:
-            as for :class:`~CosmoFuse.correlations.Integrated3PCF`.  The
-            static treecode builds its cells over the whole footprint (there
-            is no patch window to preserve), from the binary mask.
+        map_precision: as for :class:`~pixpoint.correlations.Integrated3PCF`;
+            likewise ``rotation_precision``, ``accumulation_precision``,
+            ``resolution_factor``, ``pair_search_precision``, ``pack_pairs``
+            and ``fastmath``.  The static treecode builds its cells over the
+            whole footprint (there is no patch window to preserve), from the
+            binary mask.
         pack_host_pairs: pack every tile right after its pair search, so the
             host arrays and the pair file hold the 8-byte payload instead of
             the exact 24-byte pairs (as for ``Integrated3PCF``): a third of
             the host memory, and ``prepare()`` / ``load_pairs()`` skip the
             packing.  The device state is bitwise the one ``pack_pairs=True``
             builds in ``prepare()``; the file is then no longer exact.
-        cell_moments: as for :class:`~CosmoFuse.correlations.Integrated3PCF`
+        cell_moments: as for :class:`~pixpoint.correlations.Integrated3PCF`
             (``"quad"`` by default): what a coarse treecode cell carries, and
             with it the second-order phase correction of ξ− and γ_t in the
             coarse bins.  Inert at full resolution.
@@ -736,13 +739,14 @@ class Global2PCF:
         """
         e = self._engine
         with h5py.File(filepath, "r") as fp:
-            if fp.attrs.get("kind", None) != FORMAT_KIND:
+            kind = fp.attrs.get("kind", None)
+            if kind != FORMAT_KIND and kind not in _OLD_FORMAT_KINDS:
                 raise ValueError(f"{filepath} is not a Global2PCF pair file")
             version = int(fp.attrs["format_version"])
             if version > FORMAT_VERSION:
                 raise ValueError(
                     f"{filepath} has Global2PCF format version {version}; this "
-                    f"CosmoFuse reads <= {FORMAT_VERSION}"
+                    f"PixPoint reads <= {FORMAT_VERSION}"
                 )
             checks = [
                 ("nside", int(fp.attrs["nside"]), int(e.nside)),

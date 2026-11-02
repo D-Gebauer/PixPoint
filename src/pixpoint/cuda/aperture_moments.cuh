@@ -4,7 +4,7 @@
  *
  * Shared by aperture_tomo.cu and tomo_fused_3x2pt.cu; the expansion is
  * documented in the former's "Moment-carrying aperture cells" section and in
- * CosmoFuse/moments.py.  Requires common.cuh (sincos_t) to be included first.
+ * pixpoint/moments.py.  Requires common.cuh (sincos_t) to be included first.
  */
 
 template<typename T, int MOM>

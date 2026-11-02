@@ -3,7 +3,7 @@ import itertools
 import numpy as np
 import pytest
 
-from CosmoFuse.correlation_helpers import (
+from pixpoint.correlation_helpers import (
     Q_crittenden,
     Q_schneider,
     _get_pair_index,
@@ -359,7 +359,7 @@ def test_reduction_does_not_depend_on_how_many_map_sets_are_stacked():
 def test_triplet_indices_follow_combinations_with_replacement():
     """The output row order is API: it is what ``ZetaWriter`` stores and what
     a stored data vector is indexed by."""
-    from CosmoFuse.correlation_helpers import _triplet_indices
+    from pixpoint.correlation_helpers import _triplet_indices
 
     for nzbins in (1, 2, 4, 5):
         indices = _triplet_indices(nzbins)
@@ -611,8 +611,8 @@ def test_symmetric_override_beats_xi_t_symmetric():
 
 
 def test_zeta_cross_triplets_is_the_row_order():
-    from CosmoFuse.correlation_helpers import _cross_indices
-    from CosmoFuse.correlations import Integrated3PCF
+    from pixpoint.correlation_helpers import _cross_indices
+    from pixpoint.correlations import Integrated3PCF
 
     for n_centre, n_comb in ((5, 10), (4, 15), (5, 20), (4, 20), (1, 1)):
         indices = _cross_indices(n_centre, n_comb)

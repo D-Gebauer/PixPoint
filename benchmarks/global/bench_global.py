@@ -55,7 +55,7 @@ def main():
 
     import cupy
 
-    from CosmoFuse import Global2PCF, Global3PCF
+    from pixpoint import Global2PCF, Global3PCF
 
     m = hp.read_map(args.mask, dtype=np.float64)
     mask = hp.ud_grade(m, args.nside) >= 0.5

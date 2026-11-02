@@ -10,7 +10,7 @@ so a 10,000-realisation suite is ~10.6 GB held until the very end -- and
 lost entirely if the run dies at realisation 9,500.
 
 :class:`ZetaWriter` turns that into a stream.  ``zeta`` is an average over
-*patches* (:func:`CosmoFuse.correlation_helpers.calculate_all_zetas`
+*patches* (:func:`pixpoint.correlation_helpers.calculate_all_zetas`
 averages over axis 2 and carries the map axis through untouched), so the
 reduction of map-set *k* needs nothing but map-set *k*: it can run the
 moment the measurement returns and the per-patch arrays can be dropped.
@@ -45,7 +45,7 @@ GPU + ``reduce="none"``       1.06 MB D2H                     HDF5 only
 host (multi-GPU, CPU)         queue the arrays                reduce + HDF5
 ===========================  ==============================  ==================
 
-:class:`~CosmoFuse.multi_device.MultiDeviceIntegrated3PCF` concatenates the
+:class:`~pixpoint.multi_device.MultiDeviceIntegrated3PCF` concatenates the
 per-device outputs on the patch axis and always returns host arrays, so it
 lands in the third row: the reduction runs on the CPU, in the writer
 thread, off the measurement's critical path.  No device code is involved
@@ -82,8 +82,8 @@ class ZetaWriter(ResultWriter):
 
     Args:
         path: Output HDF5 file.
-        corr: The :class:`~CosmoFuse.correlations.Integrated3PCF` (or
-            :class:`~CosmoFuse.multi_device.MultiDeviceIntegrated3PCF`) that
+        corr: The :class:`~pixpoint.correlations.Integrated3PCF` (or
+            :class:`~pixpoint.multi_device.MultiDeviceIntegrated3PCF`) that
             produced the measurements.  Read once, for provenance.
         reduce: ``"zeta"`` (default) stores the eight i3PCF variants;
             ``"none"`` stores the raw per-patch arrays.
@@ -115,7 +115,7 @@ class ZetaWriter(ResultWriter):
         process -- and charges a worse crash story for it.  Leave it off
         unless you want the live view.
 
-    The file layout is that of :class:`~CosmoFuse.result_writer.ResultWriter`
+    The file layout is that of :class:`~pixpoint.result_writer.ResultWriter`
     with the group ``zeta`` or ``raw``; the per-estimator part is the
     reduction, which runs on the device inside ``submit()`` for device
     results and in the writer thread for host results.

@@ -21,7 +21,7 @@ import h5py
 import healpy as hp
 import numpy as np
 
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 
 def fields_of(result, *names):
@@ -82,11 +82,11 @@ def timed(fn, corr, n):
 
 def geometry(Q):
     des_map = hp.ud_grade(hp.read_map(MASK), 512)
-    pair_file = f"{SBI}/CosmoFuse/Q{Q}/2PCF_pairs_512_15_250_8.h5"
+    pair_file = f"{SBI}/pixpoint/Q{Q}/2PCF_pairs_512_15_250_8.h5"
     with h5py.File(pair_file, "r") as fp:
         attrs = dict(fp.attrs)
-    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_theta.dat")
     geo = dict(
         nbins=int(attrs["nbins"]),
         theta_min=float(np.degrees(attrs["theta_min"]) * 60),

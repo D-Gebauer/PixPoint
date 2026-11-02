@@ -3,7 +3,7 @@ Moment-carrying treecode cells: geometry and the reference arithmetic.
 
 The static treecode replaces every child pair ``(i in I, j in J)`` of a
 coarse cell pair by the parents' geometry.  For xi- the only approximation,
-given the parents' bin, is the rotation phase: with the CosmoFuse rotation
+given the parents' bin, is the rotation phase: with the PixPoint rotation
 ``gamma' = gamma e^{2i phi}`` the pair product is
 
     gamma'_i gamma'_j = gamma_i gamma_j e^{2i(phi_I + phi_J)} e^{2i dphi_ij},
@@ -22,7 +22,7 @@ with ``dr_j`` the gnomonic (tangent-plane) offset of child j from the cell
 centroid in the cell's east/north frame and ``g~_j = g_j e^{2iS rho_j}`` the
 child shear parallel-transported into that frame (``rho_j`` = angle of the
 child's east vector in the cell frame; exact geometry, independent of the
-maps).  ``S`` is the sign of the rotation convention: CosmoFuse rotates
+maps).  ``S`` is the sign of the rotation convention: PixPoint rotates
 with ``e^{+2i phi}``, which is ``S = -1`` in the notation of the prototype
 (``benchmarks/moments/moment_probe.py``, S = +1 there with the opposite
 rotation); every formula below carries the symbol so the derivation can be
@@ -56,7 +56,7 @@ from typing import Any, Tuple
 
 import numpy as np
 
-#: Sign of the rotation convention in the expansion above: CosmoFuse rotates
+#: Sign of the rotation convention in the expansion above: PixPoint rotates
 #: the shear into the pair frame with ``e^{+2i phi}`` (``S = -1``).  Not a
 #: user option -- see ``tests/test_cell_moments.py`` for the gate that fixes it.
 MOMENT_SIGN = -1.0

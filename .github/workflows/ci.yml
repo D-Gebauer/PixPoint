@@ -54,7 +54,7 @@ jobs:
     - name: Run tests
       # Exclude GPU tests since standard runners don't have GPUs
       run: |
-        pytest -m "not gpu" --cov=CosmoFuse --cov-report=xml
+        pytest -m "not gpu" --cov=pixpoint --cov-report=xml
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
@@ -66,3 +66,22 @@ jobs:
         # nothing to do with the code -- so this stays false until the
         # secret is set in the repository.
         fail_ci_if_error: false
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Install the package with the docs extras
+      run: |
+        pip install --upgrade pip
+        pip install -e ".[docs]"
+
+    - name: Build the documentation (warnings are errors)
+      run: make docs

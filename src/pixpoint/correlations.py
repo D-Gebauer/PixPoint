@@ -411,7 +411,7 @@ class Integrated3PCF:
                 bin on the full-resolution map.  ``True`` (or
                 ``"default"``) switches on the *static treecode* with the
                 default factor ``k = 4``
-                (:data:`CosmoFuse.DEFAULT_RESOLUTION_FACTOR`); a positive
+                (:data:`pixpoint.DEFAULT_RESOLUTION_FACTOR`); a positive
                 number sets ``k`` explicitly.  Bin ``b`` is then measured on
                 the coarsest HEALPix level whose pixel size is
                 ``<= theta_lo(b) / k`` (per-patch cells, weighted means at
@@ -649,7 +649,7 @@ class Integrated3PCF:
         """Construct a Integrated3PCF with patch centres selected from a mask.
 
         Convenience wrapper around
-        :func:`CosmoFuse.utils.select_patch_centers`: candidate centres on
+        :func:`pixpoint.utils.select_patch_centers`: candidate centres on
         an ``nside_centers`` grid are accepted when the masked fraction of
         ``mask`` within the patch disc (radius ``patch_size``) and within
         the compensated-filter support disc (radius ``5 * theta_Q``) stays
@@ -672,7 +672,7 @@ class Integrated3PCF:
                 ``|filter|`` weight) or ``"signed"`` (deviation of the
                 filter integral, ``|Σ_masked Q| / Σ|Q|``); always from the
                 binary mask, see
-                :func:`CosmoFuse.utils.select_patch_centers`.
+                :func:`pixpoint.utils.select_patch_centers`.
             aperture_filter: Filter for the weighted check; defaults to
                 the built-in ``Q_crittenden``.  Selection only — pass the
                 same filter to :meth:`preprocess` for consistency.
@@ -943,7 +943,7 @@ class Integrated3PCF:
     def zeta_triplets(nzbins: int) -> List[Tuple[int, int, int]]:
         """Row order of the ζ estimators as ``(z_center, z2, z3)``.
 
-        What :func:`~CosmoFuse.correlation_helpers.calculate_all_zetas`
+        What :func:`~pixpoint.correlation_helpers.calculate_all_zetas`
         returns along axis 1, and therefore what ``ZetaWriter`` stores --
         for the estimators whose centre and annulus share one tomographic
         sample: ``zeta_a_plus``, ``zeta_a_minus`` and ``zeta_g_g``.  The
@@ -6392,7 +6392,7 @@ class Integrated3PCF:
         ``M_a`` at every patch centre -- the ingredients of ζ_{a,±}.
 
         ``shear_maps``: ``(nz, 2, npix | n_active)``, ``w``: ``(nz, npix |
-        n_active)``.  Returns an :class:`~CosmoFuse.results.IntegratedResult`
+        n_active)``.  Returns an :class:`~pixpoint.results.IntegratedResult`
         with ``xi_p``, ``xi_m`` (rows ``gg_combinations``) and ``M_a``.
         """
         if apertures:

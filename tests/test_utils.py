@@ -5,9 +5,9 @@ import unittest
 import healpy as hp
 import numpy as np
 
-from CosmoFuse.correlation_helpers import Q_schneider
-from CosmoFuse.correlations import Integrated3PCF
-from CosmoFuse.utils import pixel2RaDec, select_patch_centers
+from pixpoint.correlation_helpers import Q_schneider
+from pixpoint.correlations import Integrated3PCF
+from pixpoint.utils import pixel2RaDec, select_patch_centers
 
 
 class TestUtils(unittest.TestCase):
@@ -322,7 +322,7 @@ class TestFilterWeightedSelection(unittest.TestCase):
         """With a compensated filter the signed mode asks how far the mask
         pushes the aperture away from being compensated: masked regions of
         opposite sign cancel, which the importance ("abs") mode never allows."""
-        from CosmoFuse import U_crittenden
+        from pixpoint import U_crittenden
 
         # the filter integrates to ~0 over the support disc
         theta = np.radians(np.linspace(0, 450, 200001) / 60)

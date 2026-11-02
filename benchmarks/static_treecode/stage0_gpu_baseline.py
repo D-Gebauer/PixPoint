@@ -21,7 +21,7 @@ import h5py
 import healpy as hp
 import numpy as np
 
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 
 def fields_of(result, *names):
@@ -50,7 +50,7 @@ def main() -> None:
 
     nside = 512
     npix = hp.nside2npix(nside)
-    pair_file = f"{SBI}/CosmoFuse/Q{args.Q}/2PCF_pairs_512_15_250_8.h5"
+    pair_file = f"{SBI}/pixpoint/Q{args.Q}/2PCF_pairs_512_15_250_8.h5"
     des_map = hp.ud_grade(
         hp.read_map("/home/moon/dgebauer/research/lfi/local/DESY3_Mask.fits"), nside
     )
@@ -61,8 +61,8 @@ def main() -> None:
         attrs = dict(fp.attrs)
     print("pair file attrs:", attrs)
 
-    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q{args.Q}/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q{args.Q}/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/pixpoint/Q{args.Q}/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/pixpoint/Q{args.Q}/patch_center_original_theta.dat")
     corr = Integrated3PCF(
         nside,
         phi,

@@ -1,7 +1,7 @@
 import numpy as np, sys
 sys.path.insert(0, "benchmarks/static_treecode")
 from stage7_gpu_tiles import geometry, make_maps, set_tiled, methods, as_list
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 phi, theta, geo, pair_file = geometry(110)
 n = 48
 res = {}

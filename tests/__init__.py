@@ -1,1 +1,1 @@
-"""Test package for CosmoFuse."""
+"""Test package for PixPoint."""

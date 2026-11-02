@@ -13,7 +13,7 @@
  * with dr_j the gnomonic offset of pixel j from the cell centroid in the
  * cell's east/north frame and v~_j the pixel value: for shear (KIND 2) the
  * complex gamma parallel-transported into the cell frame, gamma e^{2iS rho}
- * (S = -1, CosmoFuse's rotation convention -- see CosmoFuse/moments.py),
+ * (S = -1, PixPoint's rotation convention -- see pixpoint/moments.py),
  * for a scalar (KIND 1) the real value, for KIND 0 the constant 1 (moments
  * of the weights).  The geometry is evaluated on the fly in double from the
  * stored unit vectors (cell record: x, e, n; pixel: x) -- no per-entry

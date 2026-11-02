@@ -517,7 +517,7 @@ __device__ __forceinline__ void tile_multi(
  * dy^2)].  The pair geometry of these bins is the full position angle at
  * both ends and the inverse separation; the rotation e^{2i phi} is built
  * from phi here, so the packed and the unpacked geometry run the same
- * arithmetic.  See CosmoFuse/moments.py for the expansion and the sign
+ * arithmetic.  See pixpoint/moments.py for the expansion and the sign
  * convention (S = -1 below).
  *
  * The moment tiles are launched over every bin and *skip* the bins their

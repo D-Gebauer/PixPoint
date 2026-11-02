@@ -5,9 +5,9 @@ import healpy as hp
 import numpy as np
 import treecorr
 
-from CosmoFuse import Q_crittenden, U_crittenden, U_tophat
-from CosmoFuse.correlations import Integrated3PCF
-from CosmoFuse.utils import pixel2RaDec
+from pixpoint import Q_crittenden, U_crittenden, U_tophat
+from pixpoint.correlations import Integrated3PCF
+from pixpoint.utils import pixel2RaDec
 
 from ._results import fields_of
 

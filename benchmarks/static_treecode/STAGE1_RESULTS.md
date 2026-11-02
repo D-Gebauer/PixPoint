@@ -2,7 +2,7 @@
 
 `stage1_prototype.py` → `results/stage1.npz`, `stage1_analyse.py` →
 `results/stage1_analysis.txt`. Standalone brute-force code (independent of the
-CosmoFuse measurement path). nside 2048, real DES Y3 mask, 96 Q110 patches
+PixPoint measurement path). nside 2048, real DES Y3 mask, 96 Q110 patches
 (incl. dec 0°, dec −62°, 25 % and 50 % masked) × 12 Gaussian realisations
 from a CCL halofit C_ℓ (sources ⟨z⟩≈0.75, lenses z=0.4, b=1.6), pixel window
 applied, lmax = 6143. No nside-2048 sims exist on the cluster (production
@@ -17,7 +17,7 @@ just a selection rule.
 ## 0. Reference validation
 Full resolution / theory = 1.00–1.03 for all four statistics below 60′
 (larger bins: cosmic variance, flat-sky theory, truncated last bin). Note:
-healpy-generated maps need `flip_g2=True` for positive γ_t in CosmoFuse's
+healpy-generated maps need `flip_g2=True` for positive γ_t in PixPoint's
 convention (`flip_g1` gives identical ξ± but γ_t < 0).
 
 ## 1. Suppression vs effective k (= θ_lo / pixel size), noise-free

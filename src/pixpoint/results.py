@@ -7,13 +7,13 @@ binning -- instead of a positional tuple whose order and row layout the
 caller has to know.
 
 * :class:`IntegratedResult` -- per-patch outputs of
-  :class:`~CosmoFuse.correlations.Integrated3PCF` (the i3PCF ingredients);
+  :class:`~pixpoint.correlations.Integrated3PCF` (the i3PCF ingredients);
 * :class:`TwoPointResult` -- summed numerators and weights of
-  :class:`~CosmoFuse.global_2pcf.Global2PCF`;
+  :class:`~pixpoint.global_2pcf.Global2PCF`;
 * :class:`ThreePointResult` -- multipole sums of
-  :class:`~CosmoFuse.global_3pcf.Global3PCF`;
+  :class:`~pixpoint.global_3pcf.Global3PCF`;
 * :class:`OnePointResult` -- histogram and moment sums of
-  :class:`~CosmoFuse.onepoint.OnePoint`.
+  :class:`~pixpoint.onepoint.OnePoint`.
 
 The global and one-point results hold *sums* (numerators and weights), so results of
 different devices, footprints or chunks add with ``+``; the estimate is formed
@@ -86,7 +86,7 @@ class IntegratedResult:
 
     def zetas(self, **kwargs: Any) -> Dict[str, Any]:
         """Every i3PCF ζ the measured fields form (see
-        :func:`~CosmoFuse.correlation_helpers.calculate_all_zetas`; extra
+        :func:`~pixpoint.correlation_helpers.calculate_all_zetas`; extra
         keyword arguments are forwarded)."""
         from .correlation_helpers import calculate_all_zetas
 

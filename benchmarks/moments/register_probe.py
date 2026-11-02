@@ -11,7 +11,7 @@ spill that made the quad tile 3.4x slower than mono at nz = 4.
 
 import cupy as cp
 
-from CosmoFuse.backend.raw import KernelFile
+from pixpoint.backend.raw import KernelFile
 
 T, ACC, QT, I = "float", "double", "float", "int"
 CASES = [

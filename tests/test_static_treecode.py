@@ -21,8 +21,8 @@ import healpy as hp
 import numpy as np
 import pytest
 
-from CosmoFuse.correlations import Integrated3PCF, _compute_pairs_impl
-from CosmoFuse.treecode import assign_levels, level_groups
+from pixpoint.correlations import Integrated3PCF, _compute_pairs_impl
+from pixpoint.treecode import assign_levels, level_groups
 
 from ._results import fields_of
 from .test_gpu_kernel_emulation import emulated_gpu
@@ -286,9 +286,9 @@ class TestOptionPlumbing(TreecodeBase):
             make_corr(self.mask, memory_budget_gb=0)
 
     def test_default_factor_when_switched_on(self):
-        import CosmoFuse
+        import pixpoint
 
-        self.assertEqual(CosmoFuse.DEFAULT_RESOLUTION_FACTOR, 4.0)
+        self.assertEqual(pixpoint.DEFAULT_RESOLUTION_FACTOR, 4.0)
         for on in (True, "default", "DEFAULT"):
             corr = make_corr(self.mask, resolution_factor=on)
             self.assertEqual(corr.resolution_factor, 4.0)
@@ -350,7 +350,7 @@ class TestOptionPlumbing(TreecodeBase):
             self.assertTrue(np.array_equal(x, y))
 
     def test_preflight_fires_before_pair_finding(self):
-        from CosmoFuse.pair_geometry import PairGeometry
+        from pixpoint.pair_geometry import PairGeometry
 
         # a budget between the full-resolution and the k=2 projection
         need_full = PairGeometry.preflight_pair_memory(
@@ -369,7 +369,7 @@ class TestOptionPlumbing(TreecodeBase):
         self.assertIn("different, windowed estimator", str(ctx.exception))
 
     def test_preflight_projection_is_accurate(self):
-        from CosmoFuse.pair_geometry import PairGeometry
+        from pixpoint.pair_geometry import PairGeometry
 
         for corr in (make_corr(self.mask, memory_budget_gb=1e6),):
             report = PairGeometry.preflight_pair_memory(corr)
@@ -414,7 +414,7 @@ class TestPairSearchPrecision(unittest.TestCase):
         self.assertEqual(clone._pair_finder.search_dtype, np.float64)
 
     def test_small_scale_float32_search_warns(self):
-        with self.assertLogs("CosmoFuse.correlations", level="WARNING") as logs:
+        with self.assertLogs("pixpoint.correlations", level="WARNING") as logs:
             Integrated3PCF(
                 64,
                 PHI_C,
@@ -426,7 +426,7 @@ class TestPairSearchPrecision(unittest.TestCase):
                 pair_search_precision="float32",
             )
         self.assertIn("pair_search_precision='float64'", logs.output[0])
-        with self.assertNoLogs("CosmoFuse.correlations", level="WARNING"):
+        with self.assertNoLogs("pixpoint.correlations", level="WARNING"):
             Integrated3PCF(
                 64,
                 PHI_C,
@@ -965,7 +965,7 @@ class TestTreecodeIO(TreecodeBase):
             self.tree.save_pairs(path)
             with h5py.File(path, "r") as fp:
                 self.assertEqual(int(fp.attrs["format_version"]), 3)
-                # structurally unreadable for CosmoFuse <= 4.20
+                # structurally unreadable for PixPoint <= 4.20
                 self.assertNotIn("pair_inds", fp)
                 self.assertNotIn("Q_inds", fp) if self.tree.aperture_nside else None
                 self.assertEqual(fp["level_nside"][:].tolist(), EXPECTED_LEVELS)

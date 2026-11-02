@@ -285,7 +285,7 @@ __global__ void gpu_aperture_density_tomo_fused(
  *   F_pt = M - 2iS/d Dp - 2/d^2 Qpp + 2iS/d^2 Qqp,   S = -1,
  *   sum_p w f U(theta_p)        = U M + U' Dq + U'' Qqq / 2 + (U'/d) Qpp / 2.
  *
- * See CosmoFuse/moments.py (aperture_shear_terms, aperture_scalar_terms).
+ * See pixpoint/moments.py (aperture_shear_terms, aperture_scalar_terms).
  * The row buffers hold W and, for shear with moments on, the transported
  * mean, which is the M above.  One block per patch, NZ bins inside it (the
  * fused form only; the moments are a library feature, not a 4.20 path).

@@ -6,7 +6,7 @@ aperture-mass PDF of a shear map (M_ap and its cross component M_x), the PDF
 of a convergence or density map smoothed with a top hat or a compensated
 filter, and their moments -- with the same row space, map inputs, weights,
 backends and ``aperture_nside`` window as
-:class:`~CosmoFuse.correlations.Integrated3PCF`.
+:class:`~pixpoint.correlations.Integrated3PCF`.
 
 **Estimator.**  For a scale θ the centres are the HEALPix pixels of
 ``centre_nside`` (default: the level whose pixel is closest to θ/2) whose
@@ -44,7 +44,7 @@ alone, one extra pass over the discs per call, since the kernels return NaN
 or 0 for it depending on the backend) is left out of the sums and the
 histogram of every bin; ``count`` says how many entered.  The reduction runs on
 the backend's array module; the sums are returned on the host and add
-across devices and footprints (:class:`~CosmoFuse.results.OnePointResult`).
+across devices and footprints (:class:`~pixpoint.results.OnePointResult`).
 
 **Not here: mass mapping.**  κ from shear needs spherical harmonic
 transforms; produce κ (or δ) upstream and pass it to ``k``.

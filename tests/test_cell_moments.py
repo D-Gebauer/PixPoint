@@ -23,8 +23,8 @@ import healpy as hp
 import numpy as np
 import pytest
 
-from CosmoFuse import Global2PCF, Integrated3PCF, U_crittenden
-from CosmoFuse.moments import (
+from pixpoint import Global2PCF, Integrated3PCF, U_crittenden
+from pixpoint.moments import (
     MOMENT_SIGN,
     cell_frames,
     cell_moments_numpy,
@@ -35,7 +35,7 @@ from CosmoFuse.moments import (
     unit_vectors,
     xipm_pair_terms,
 )
-from CosmoFuse.utils import pixel2RaDec
+from pixpoint.utils import pixel2RaDec
 
 from ._results import fields_of
 from .test_gpu_kernel_emulation import emulated_gpu
@@ -108,7 +108,7 @@ def _smooth_maps(seed=7, nz=1):
     return shear, dens, w, w
 
 
-# ── exact child sums with CosmoFuse's conventions ──────────────────────────
+# ── exact child sums with PixPoint's conventions ──────────────────────────
 
 
 def _pixel_geom(rows, corr):
@@ -149,7 +149,7 @@ def _children(corr, level, cells):
 def _exact_pair_sums(corr, level, cells_a, cells_b, g, w, delta, w_d):
     """Per coarse pair: exact sums over the children of (xi+, xi-, w_ss,
     gamma_t (a lens, b source), gamma_t (b lens, a source), w_ds_ab, w_ds_ba)
-    with the CosmoFuse rotation e^{2i phi}."""
+    with the PixPoint rotation e^{2i phi}."""
     kids_a = _children(corr, level, cells_a)
     kids_b = _children(corr, level, cells_b)
     out = np.zeros((len(cells_a), 7))
@@ -909,7 +909,7 @@ class TestApertureMoments(unittest.TestCase):
     def _exact_apertures(cls, corr):
         """(M_a, M_g with U) per (z, patch) from the exact child sums of the
         coarse disc cells about the coarse centre pixel."""
-        from CosmoFuse import Q_crittenden
+        from pixpoint import Q_crittenden
 
         rows = corr.row_pix
         cell_pix, indptr, child_rows = corr._aperture_cells()
@@ -945,8 +945,8 @@ class TestApertureMoments(unittest.TestCase):
         return ma, mg
 
     def test_filter_derivatives(self):
-        from CosmoFuse import Q_crittenden, Q_schneider, U_crittenden, U_schneider
-        from CosmoFuse.correlation_helpers import filter_derivatives
+        from pixpoint import Q_crittenden, Q_schneider, U_crittenden, U_schneider
+        from pixpoint.correlation_helpers import filter_derivatives
 
         th = np.linspace(0.002, 0.25, 500)
         for fn in (Q_crittenden, U_crittenden, Q_schneider, U_schneider):

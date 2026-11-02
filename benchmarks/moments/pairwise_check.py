@@ -34,7 +34,7 @@ def main():
 
     m = hp.read_map(args.mask)
     mask = hp.ud_grade(m.astype(np.float64), args.nside) != 0
-    from CosmoFuse.utils import select_patch_centers
+    from pixpoint.utils import select_patch_centers
 
     phi_c, theta_c = select_patch_centers(mask, 8, patch_size=args.Q, theta_Q=args.Q)
     # a centre at high |dec| makes the frame terms visible

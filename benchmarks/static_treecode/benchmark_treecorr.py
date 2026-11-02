@@ -11,8 +11,8 @@ Reference: TreeCorr, bin_slop = 0 AND angle_slop = 0, metric Arc, on the pixel
 catalogue of every patch (exact pixel-pair estimator).  bin_slop = 0 alone is
 not exact: TreeCorr >= 5 then still approximates the shear projection angles
 (xi- off by ~1e-2 of the patch scatter); with angle_slop = 0 it agrees with an
-independent brute-force calculation to 1e-10, as CosmoFuse does to 1e-16.  Also TreeCorr with its default bin_slop
-(TreeCorr's own tree approximation) for context.  CosmoFuse runs on the GPU:
+independent brute-force calculation to 1e-10, as PixPoint does to 1e-16.  Also TreeCorr with its default bin_slop
+(TreeCorr's own tree approximation) for context.  PixPoint runs on the GPU:
 full resolution (where it fits), resolution_factor = 4, and 4 + pack_pairs.
 
 Reported per method vs the reference, separately for xi+ / xi- and for
@@ -21,7 +21,7 @@ auto / cross tomographic combinations:
     in units of the patch-to-patch scatter of that bin,
   * relative differences of the patch-averaged correlation function,
   * timings.
-Cross-combinations: CosmoFuse averages the two orientation *ratios*,
+Cross-combinations: PixPoint averages the two orientation *ratios*,
 TreeCorr takes the ratio of the summed orientations; with different weights
 per bin these differ slightly by construction.
 """
@@ -98,8 +98,8 @@ def run_treecorr(mode, nproc, npatch):
     return xip, xim, wall
 
 
-def run_cosmofuse(label, k, pack, chunk=None, search="float64", **kw):
-    from CosmoFuse import Integrated3PCF
+def run_pixpoint(label, k, pack, chunk=None, search="float64", **kw):
+    from pixpoint import Integrated3PCF
 
     npatch = G["npatch"]
     chunks = [(0, npatch)] if chunk is None else [(a, min(a + chunk, npatch)) for a in range(0, npatch, chunk)]
@@ -201,7 +201,7 @@ def main():
                     help="real = production map + DES weights (nside 512 only); nbody = CosmoGrid")
     ap.add_argument("--noise", type=float, nargs="+", default=[0.0],
                     help="nbody: shape noise per component and pixel (DES-like: 0.032 at 512, 0.128 at 2048)")
-    ap.add_argument("--fullres-patches", type=int, default=48, help="2048: full-resolution CosmoFuse on this many patches")
+    ap.add_argument("--fullres-patches", type=int, default=48, help="2048: full-resolution PixPoint on this many patches")
     ap.add_argument("--run", type=int, default=0)
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
@@ -210,8 +210,8 @@ def main():
         return
 
     Q = 90
-    phi_c = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_phi.dat")
-    theta_c = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_theta.dat")
+    phi_c = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_phi.dat")
+    theta_c = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_theta.dat")
     npatch = min(args.npatch or len(phi_c), len(phi_c))
     nside = int(args.scenario)
     m = hp.read_map(MASK)
@@ -269,7 +269,7 @@ def main():
             tc[mode] = (xp_, xm_, wall)
             print(case[2], mode, wall, flush=True)
         case[3] = tc
-    # Phase 2: CosmoFuse
+    # Phase 2: PixPoint
     for shear, note, tag, tc in cases:
         one_run(args, nside, mask, lut, row_pix, shear, w, edges, phi_c, theta_c, npatch, Q, note, t_maps, tag, tc)
 
@@ -295,15 +295,15 @@ def one_run(args, nside, mask, lut, row_pix, shear, w, edges, phi_c, theta_c, np
             "wall_s": wall, "core_s": wall * args.nproc,
             "xip": compare(tc_p, ref_p, autos), "xim": compare(tc_m, ref_m, autos)}
 
-    # ---- CosmoFuse ---------------------------------------------------------------
-    runs = [("cosmofuse_k4", 4.0, False, "float64"), ("cosmofuse_k4_packed", 4.0, True, "float64")]
+    # ---- PixPoint ---------------------------------------------------------------
+    runs = [("pixpoint_k4", 4.0, False, "float64"), ("pixpoint_k4_packed", 4.0, True, "float64")]
     if nside == 512:
-        runs = [("cosmofuse_full_resolution", None, False, "float64"),
+        runs = [("pixpoint_full_resolution", None, False, "float64"),
                 # the 4.20.0 default: pair search at float32 (rotation precision)
-                ("cosmofuse_full_resolution_float32_search", None, False, "rotation")] + runs
+                ("pixpoint_full_resolution_float32_search", None, False, "rotation")] + runs
     results = {}
     for label, k, pack, search in runs:
-        Ma, xp_, xm_, info = run_cosmofuse(label, k, pack, None, search=search)
+        Ma, xp_, xm_, info = run_pixpoint(label, k, pack, None, search=search)
         info["xip"] = compare(xp_, ref_p, autos); info["xim"] = compare(xm_, ref_m, autos)
         report["methods"][label] = info
         results[label] = (Ma, xp_, xm_)
@@ -311,15 +311,15 @@ def one_run(args, nside, mask, lut, row_pix, shear, w, edges, phi_c, theta_c, np
     if nside == 2048 and args.fullres_patches > 0:
         n = min(args.fullres_patches, npatch)
         G["npatch"] = n
-        Ma, xp_, xm_, info = run_cosmofuse("cosmofuse_full_resolution_subset", None, False, chunk=12)
+        Ma, xp_, xm_, info = run_pixpoint("pixpoint_full_resolution_subset", None, False, chunk=12)
         G["npatch"] = npatch
         info["n_patches"] = n
         info["xip"] = compare(xp_, ref_p[:, :n], autos); info["xim"] = compare(xm_, ref_m[:, :n], autos)
-        report["methods"]["cosmofuse_full_resolution_subset"] = info
+        report["methods"]["pixpoint_full_resolution_subset"] = info
         print("full-res subset", json.dumps({k_: v for k_, v in info.items() if k_ not in ("xip", "xim")}), flush=True)
 
-    # ---- zeta level (auto combinations): exact xi from TreeCorr, M_ap from CosmoFuse ----
-    Ma = results["cosmofuse_k4"][0]
+    # ---- zeta level (auto combinations): exact xi from TreeCorr, M_ap from pixpoint ----
+    Ma = results["pixpoint_k4"][0]
     zl = {}
     for name, ref, idx in (("zeta_plus", ref_p, 1), ("zeta_minus", ref_m, 2)):
         z_ref, z_err = zeta(Ma, ref, combs)
@@ -333,9 +333,9 @@ def one_run(args, nside, mask, lut, row_pix, shear, w, edges, phi_c, theta_c, np
     report["zeta_level"] = zl
 
     # ---- cross-combination estimator definition (CPU, small subset) ---------------
-    # cross_definition_check() removed: it recombined CosmoFuse's raw
+    # cross_definition_check() removed: it recombined PixPoint's raw
     # numerators/denominators "TreeCorr-style" to compare against the
-    # pre-5.0 average-of-ratios cross estimator.  Since 5.0 CosmoFuse *is*
+    # pre-5.0 average-of-ratios cross estimator.  Since 5.0 PixPoint *is*
     # the ratio of summed orientations, so the check compared the estimator
     # against itself and could not fail.
 

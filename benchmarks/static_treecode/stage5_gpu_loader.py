@@ -9,7 +9,7 @@
 """
 import argparse, json, time
 import h5py, healpy as hp, numpy as np
-from CosmoFuse import Integrated3PCF, MapFileLoader
+from pixpoint import Integrated3PCF, MapFileLoader
 
 
 def fields_of(result, *names):
@@ -64,11 +64,11 @@ def main():
     if "A" in args.parts:
         nside = 512
         des_map = hp.ud_grade(hp.read_map(MASK), nside)
-        pair_file = f"{SBI}/CosmoFuse/Q110/2PCF_pairs_512_15_250_8.h5"
+        pair_file = f"{SBI}/pixpoint/Q110/2PCF_pairs_512_15_250_8.h5"
         with h5py.File(pair_file, "r") as fp:
             attrs = dict(fp.attrs)
-        phi = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_phi.dat")
-        theta = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_theta.dat")
+        phi = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_phi.dat")
+        theta = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_theta.dat")
         corr = Integrated3PCF(nside, phi, theta, nbins=int(attrs["nbins"]),
                            theta_min=float(np.degrees(attrs["theta_min"]) * 60),
                            theta_max=float(np.degrees(attrs["theta_max"]) * 60),
@@ -110,8 +110,8 @@ def main():
         if hp.npix2nside(mask.size) != nside:
             mask = hp.ud_grade(mask.astype(np.float64), nside)
         mask = mask != 0
-        phi = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_phi.dat")
-        theta = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_theta.dat")
+        phi = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_phi.dat")
+        theta = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_theta.dat")
         edges = np.geomspace(5.0, 250.0, 12); edges = edges[edges < 215]
         corr = Integrated3PCF(nside, phi, theta, nbins=len(edges) - 1, theta_min=edges[0], theta_max=edges[-1],
                            patch_size=110, theta_Q=110, mask=mask, device="gpu", map_precision="float32",

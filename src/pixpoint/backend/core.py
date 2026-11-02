@@ -86,7 +86,7 @@ def _build_safe_divide_kernel(module: Any) -> Any:
             const V keep = (den != (U)0) ? (V)1 : (V)0;
             out = (V)(num / safe_den) * keep;
             """,
-            "cosmofuse_safe_divide",
+            "pixpoint_safe_divide",
         )
     return _SAFE_DIVIDE_KERNEL
 

@@ -44,7 +44,7 @@ import time
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Integrated3PCF
+from pixpoint import Integrated3PCF
 
 PROBE_SOURCE = r"""
 __COMMON_CUDA_SOURCE__
@@ -223,7 +223,7 @@ def main():
           f"({n_visits / npatches:.0f}/patch) rows={n_rows} "
           f"aperture_nside={corr.aperture_nside}", flush=True)
 
-    from CosmoFuse.backend.raw import _COMMON_CUDA_SOURCE
+    from pixpoint.backend.raw import _COMMON_CUDA_SOURCE
     source = PROBE_SOURCE.replace("__COMMON_CUDA_SOURCE__", _COMMON_CUDA_SOURCE)
     mod = cupy.RawModule(code=source, options=("-std=c++14",),
                          name_expressions=[f"probe_current<{map_c}, {q_c}>"]

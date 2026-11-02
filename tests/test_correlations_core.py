@@ -7,9 +7,9 @@ from unittest.mock import patch
 import numpy as np
 from scipy.special import binom
 
-import CosmoFuse.correlations as correlations_module
-from CosmoFuse.correlations import Integrated3PCF
-from CosmoFuse.pair_geometry import PairGeometry
+import pixpoint.correlations as correlations_module
+from pixpoint.correlations import Integrated3PCF
+from pixpoint.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -776,7 +776,7 @@ class TestCorrelation(unittest.TestCase):
 class TestCrossOrientationEstimator(unittest.TestCase):
     """One xi+- estimator in the package (6.0).
 
-    A cross-bin pair contributes in both orientations.  CosmoFuse takes the
+    A cross-bin pair contributes in both orientations.  PixPoint takes the
     ratio of the summed orientations, (N_ab + N_ba) / (W_ab + W_ba) -- the
     standard weighted estimator, TreeCorr's definition.  The single-map
     ``_gg_single`` used to average the two orientation *ratios*

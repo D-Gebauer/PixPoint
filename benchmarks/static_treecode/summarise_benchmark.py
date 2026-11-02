@@ -28,7 +28,7 @@ for path in sys.argv[1:]:
                       f"{d['diff_patch_mean_in_sigma_mean_rms']:14.2e}")
     print("\n-- patch-mean xi (auto combos averaged): reference, and relative difference per bin")
     for s in ("xip", "xim"):
-        ref = r["methods"]["cosmofuse_k4"][s]["auto"]["patch_mean_per_bin_ref"]
+        ref = r["methods"]["pixpoint_k4"][s]["auto"]["patch_mean_per_bin_ref"]
         print(f"  {s} reference      ", " ".join(f"{x:10.3e}" for x in ref))
         for m, v in r["methods"].items():
             if s in v:
@@ -36,8 +36,8 @@ for path in sys.argv[1:]:
     if "cross_definition_check" in r:
         c = r["cross_definition_check"]
         print(f"\n-- cross-bin estimator definition ({c['n_patches']} patches, CPU float64, max rel. to max|xi+|): "
-              f"CosmoFuse mean-of-ratios vs TreeCorr {c['xip_cross_cosmofuse_mean_of_ratios_vs_treecorr_max_rel']:.1e}; "
-              f"CosmoFuse recombined as ratio-of-sums vs TreeCorr {c['xip_cross_cosmofuse_recombined_as_ratio_of_sums_vs_treecorr_max_rel']:.1e}")
+              f"PixPoint mean-of-ratios vs TreeCorr {c['xip_cross_pixpoint_mean_of_ratios_vs_treecorr_max_rel']:.1e}; "
+              f"PixPoint recombined as ratio-of-sums vs TreeCorr {c['xip_cross_pixpoint_recombined_as_ratio_of_sums_vs_treecorr_max_rel']:.1e}")
     if "zeta_level" in r:
         print("\n-- zeta level (auto combos), difference to exact in units of the patch-scatter error of zeta")
         for name, e in r["zeta_level"].items():

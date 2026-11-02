@@ -25,8 +25,8 @@ import healpy as hp
 import numpy as np
 import pytest
 
-from CosmoFuse import Global2PCF, Integrated3PCF, TwoPointResult
-from CosmoFuse.global_geometry import TileSet, radec_to_xyz, search_slack
+from pixpoint import Global2PCF, Integrated3PCF, TwoPointResult
+from pixpoint.global_geometry import TileSet, radec_to_xyz, search_slack
 
 from .test_gpu_kernel_emulation import emulated_gpu
 

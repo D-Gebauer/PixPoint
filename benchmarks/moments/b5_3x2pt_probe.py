@@ -18,8 +18,8 @@ import cupy as cp
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Integrated3PCF
-from CosmoFuse.utils import select_patch_centers
+from pixpoint import Integrated3PCF
+from pixpoint.utils import select_patch_centers
 
 P = "/project/ocean1-seitz/users/dgebauer"
 MASK = f"{P}/research/CosmoFuse-treecode-data/DESY3_Mask.fits"

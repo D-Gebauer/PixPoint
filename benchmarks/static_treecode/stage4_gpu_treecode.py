@@ -17,7 +17,7 @@ import h5py
 import healpy as hp
 import numpy as np
 
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 
 def fields_of(result, *names):
@@ -67,11 +67,11 @@ def part_a(args, out):
     nside = 512
     des_map = hp.ud_grade(hp.read_map(MASK), nside)
     Q = args.Q
-    pair_file = f"{SBI}/CosmoFuse/Q{Q}/2PCF_pairs_512_15_250_8.h5"
+    pair_file = f"{SBI}/pixpoint/Q{Q}/2PCF_pairs_512_15_250_8.h5"
     with h5py.File(pair_file, "r") as fp:
         attrs = dict(fp.attrs)
-    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_theta.dat")
     geo = dict(
         nbins=int(attrs["nbins"]),
         theta_min=float(np.degrees(attrs["theta_min"]) * 60),
@@ -153,8 +153,8 @@ def part_b(args, out):
         mask = hp.ud_grade(mask.astype(np.float64), nside)
     mask = mask != 0
     Q = args.Q
-    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_theta.dat")
     edges = np.geomspace(5.0, 250.0, 12)
     edges = edges[edges < 2 * Q - 5]
     out["B"] = {}

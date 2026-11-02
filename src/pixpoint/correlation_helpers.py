@@ -30,7 +30,7 @@ def _xp(*arrays: object) -> Any:
     The zeta reduction is a handful of means over the patch axis, so it can
     run wherever the measurement left its output.  Reducing on the device
     first shrinks a ~1 MB per-patch result to a ~9 kB data vector before it
-    ever crosses PCIe (see :class:`CosmoFuse.zeta_writer.ZetaWriter`).
+    ever crosses PCIe (see :class:`pixpoint.zeta_writer.ZetaWriter`).
     """
     for a in arrays:
         if type(a).__module__.split(".")[0] == "cupy":
@@ -52,10 +52,10 @@ def Q_crittenden(theta: Union[float, np.ndarray], theta_Q: float = 90) -> Any:
     compensated (∫ dθ θ U(θ) = 0), so M_ap is insensitive to the
     mass-sheet degeneracy.  Q is non-negative, peaks at θ = √2 θ_Q, is
     normalised to ∫ Q(θ) dΩ = 1, and has formally unbounded support;
-    CosmoFuse truncates the aperture geometry at 5 θ_Q, where Q has
+    PixPoint truncates the aperture geometry at 5 θ_Q, where Q has
     decayed to below 10⁻³ of its peak value.
 
-    This is CosmoFuse's default aperture filter, and the filter used for
+    This is PixPoint's default aperture filter, and the filter used for
     the integrated 3-point correlation functions in Halder et al. (2021).
 
     References:
@@ -148,7 +148,7 @@ def Q_schneider(theta: Union[float, np.ndarray], theta_Q: float = 90) -> Any:
     U(θ) = 9/(π θ_Q²) · (1 - x²)(1/3 - x²) for x ≤ 1, which is
     compensated and negative for 1/√3 < x < 1.  Like the Crittenden
     et al. (2002) filter it is normalised to ∫ Q(θ) dΩ = 1, but it has
-    compact support: it vanishes identically beyond θ_Q.  (CosmoFuse
+    compact support: it vanishes identically beyond θ_Q.  (PixPoint
     builds aperture geometry out to 5 θ_Q; with this filter the pixels
     beyond θ_Q simply receive zero weight.)
 

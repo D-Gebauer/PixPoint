@@ -4,7 +4,7 @@ On the real geometry (DES Y3), for the ``ggg`` fields, times the step-1 kernel
 over all centres and checks every variant bitwise against the shipped kernel:
 
 * P0   the installed kernel with the <= 7.2 table (every sigma x both pair
-       types); against CosmoFuse 7.2 this is the kernel the numbers in
+       types); against PixPoint 7.2 this is the kernel the numbers in
        RESULTS.md compare to;
 * P1   the installed kernel, only the (sigma, type) pair products ggg reads;
 * v3   the kernel shipped in 7.3.0 and its ablations: 4-FMA accumulation,
@@ -27,7 +27,7 @@ import cupy as cp
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Global3PCF
+from pixpoint import Global3PCF
 
 TILED_SRC = r"""
 static __device__ __forceinline__ void cf_sincos(float x, float* s, float* c) { sincosf(x, s, c); }

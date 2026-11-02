@@ -2,7 +2,7 @@
 and unpacked, 24 production patches; also single pass vs three tiles."""
 import numpy as np
 from stage7_gpu_tiles import geometry, make_maps, rel
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 
 def fields_of(result, *names):

@@ -1,6 +1,6 @@
 import sys, cProfile, pstats
 import healpy as hp, numpy as np, cupy
-from CosmoFuse import Global3PCF
+from pixpoint import Global3PCF
 nside = int(sys.argv[1])
 m = hp.read_map(sys.argv[2], dtype=np.float64)
 mask = hp.ud_grade(m, nside) >= 0.5

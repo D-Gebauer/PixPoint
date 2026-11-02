@@ -40,8 +40,8 @@ Two references on the same pair lists: **fine** = full-resolution pixel pairs (3
 CSR, double precision). target − fine is the binning error (common to all variants); variant −
 target is the phase error the moments address.
 
-Validation: the probe's mono variant reproduces CosmoFuse's `gg` to ≤ 3.4 × 10⁻⁶ σ_patch at full
-resolution and at every k (the production convention is S = +1 on the unflipped shear ≡ CosmoFuse
+Validation: the probe's mono variant reproduces PixPoint's `gg` to ≤ 3.4 × 10⁻⁶ σ_patch at full
+resolution and at every k (the production convention is S = +1 on the unflipped shear ≡ PixPoint
 `flip_g1=True`); float32 vs float64 products ≤ 3.4 × 10⁻⁶ σ_patch; the per-pair residuals scale
 as 4δφ : 8δφ² : (4δφ)³/6 (`pairwise_check.py`, nside 512, k = 4: 18 % → 5.5 % → 1.2 % per pair).
 
@@ -110,8 +110,8 @@ Per-pair cost, flat across k (all pairs run through the moment kernel in the pro
 Pair counts: full res 3.60 × 10⁸; k = 8 1.69 × 10⁸ (coarse bins 1.41 × 10⁷); k = 4 5.90 × 10⁷
 (coarse 8.4 × 10⁶); k = 2 1.74 × 10⁷ (coarse 3.1 × 10⁶). Kernel wall (nz = 1): full-res mono
 4.73 ms; k = 8 mono 2.15 ms; k = 4 mono 0.73 / dipole 1.29 / quad 1.60 ms; k = 2 mono 0.24 /
-dipole 0.42 / quad 0.53 ms. CosmoFuse `gg` (pairs only) for scale: full 10.2 ms, k = 8 6.6 ms,
-k = 4 4.1 ms (packed 3.8), k = 2 4.1 ms — the CosmoFuse call is host/expansion-bound at this
+dipole 0.42 / quad 0.53 ms. PixPoint `gg` (pairs only) for scale: full 10.2 ms, k = 8 6.6 ms,
+k = 4 4.1 ms (packed 3.8), k = 2 4.1 ms — the PixPoint call is host/expansion-bound at this
 size, so only the kernel numbers compare the variants.
 
 In a library implementation only the **coarse-bin** pairs need moments (fine-level rows have
@@ -140,7 +140,7 @@ more accurate.
 
 ## Follow-up: Global2PCF prototype benchmark at nside 1024 with edge splitting (2026-11-02; prototype only, the library's split was removed)
 
-The same variants on CosmoFuse's footprint-wide `Global2PCF` pair lists (DES Y3 multiprobe mocks,
+The same variants on PixPoint's footprint-wide `Global2PCF` pair lists (DES Y3 multiprobe mocks,
 20 maps, 8 bins 15′–250′, source bin 4 with weights, TreeCorr brute as the baseline), plus a
 **top-down edge-splitting pair search** (`edge_slop = 0`: a cell pair whose separation range crosses a
 bin edge is split until it fits, down to exactly binned pixel pairs; cells coarser than the bin's static
@@ -161,7 +161,7 @@ cells and edge splitting" of `notebooks/02_global2pcf_treecorr.ipynb`). Headline
 ## Library implementation (8.0.0, 2026-11-02)
 
 `cell_moments="quad"` (default) / `"dipole"` / `None` on `Integrated3PCF` and `Global2PCF`:
-`src/CosmoFuse/moments.py` (derivation + numpy reference), `cuda/moment_rows.cu` (per-level
+`src/pixpoint/moments.py` (derivation + numpy reference), `cuda/moment_rows.cu` (per-level
 moment builder straight from the pixel rows), the `*_mom` tiles of `cuda/pair_tiles.cuh`, and
 the aperture kernels of `cuda/aperture_moments.cuh`.  Gates: `tests/test_cell_moments.py`.
 
@@ -182,7 +182,7 @@ error of the patch sum, for `M_a` (Q_crittenden) and `M_g` with `U_crittenden`:
 (one patch each; the second patch of every row behaves the same.)  The dipole removes the
 scatter (per-cell residual ÷ 10) and the quad the mean (patch sum ÷ 100–1000), as the ξ−
 measurements above and the estimate table of the guide predicted.  No weight moments are
-needed: CosmoFuse normalises every aperture by Σw without the filter, so only the numerator
+needed: PixPoint normalises every aperture by Σw without the filter, so only the numerator
 expands; the patch-mean `M_g` (constant filter) needs nothing.
 
 ### Cost in the library (A100, DES Y3 mask, 450 patches of Q90, 7′–123′ in 9 bins, k = 4, float32 maps, device-resident input, median of 7)

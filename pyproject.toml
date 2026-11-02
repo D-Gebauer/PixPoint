@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cosmofuse"
+name = "pixpoint"
 version = "7.7.0"
 authors = [
     { name="David Gebauer", email="git@gebauer.ai" },
 ]
-description = "GPU/CPU measurement of integrated 3-point, footprint-wide 2-point and 3-point correlation functions on HEALPix maps"
+description = "Two-point, three-point, integrated three-point and one-point statistics of HEALPix maps, on CPUs and GPUs"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
@@ -52,20 +52,19 @@ dev = [
     "pre-commit>=2.0.0",
     "treecorr",
 ]
-# No Sphinx sources are in the tree yet; the documentation is README.md
-# plus docs/estimator_note.md. Kept so the readthedocs URL below has a
-# declared toolchain the day the sources land.
 docs = [
-    "sphinx>=5.0.0",
-    "sphinx-rtd-theme>=1.0.0",
-    "nbsphinx>=0.8.0",
+    "sphinx>=7.0",
+    "myst-parser>=3.0",
+    "furo>=2024.1",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
 ]
 
 [project.urls]
-Homepage = "https://github.com/D-Gebauer/CosmoFuse"
-Repository = "https://github.com/D-Gebauer/CosmoFuse"
-Documentation = "https://cosmofuse.readthedocs.io"
-"Bug Tracker" = "https://github.com/D-Gebauer/CosmoFuse/issues"
+Homepage = "https://github.com/D-Gebauer/PixPoint"
+Repository = "https://github.com/D-Gebauer/PixPoint"
+Documentation = "https://pixpoint.readthedocs.io"
+"Bug Tracker" = "https://github.com/D-Gebauer/PixPoint/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -74,7 +73,7 @@ where = ["src"]
 "" = "src"
 
 [tool.setuptools.package-data]
-"CosmoFuse" = ["cuda/*.cu", "cuda/*.cuh", "py.typed"]
+"pixpoint" = ["cuda/*.cu", "cuda/*.cuh", "py.typed"]
 
 [tool.black]
 line-length = 88
@@ -98,7 +97,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["CosmoFuse"]
+known_first_party = ["pixpoint"]
 
 [tool.mypy]
 python_version = "3.12"

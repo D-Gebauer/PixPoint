@@ -1,8 +1,8 @@
 """Split one Global3PCF.shear call into step 1 (kernel) and step 2 (contraction)."""
 import sys, time
 import healpy as hp, numpy as np, cupy
-from CosmoFuse import Global3PCF
-import CosmoFuse.global_3pcf as g3m
+from pixpoint import Global3PCF
+import pixpoint.global_3pcf as g3m
 
 nside = int(sys.argv[1]); mask_path = sys.argv[2]; chunk = int(sys.argv[3]) if len(sys.argv) > 3 else 4096
 m = hp.read_map(mask_path, dtype=np.float64)

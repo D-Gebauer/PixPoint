@@ -23,7 +23,7 @@ import cupy as cp
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Global3PCF
+from pixpoint import Global3PCF
 
 
 def accumulate(self, fields, centre_values, jobs, merge=False, derive=False):

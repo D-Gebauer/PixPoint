@@ -15,7 +15,7 @@ import unittest
 import healpy as hp
 import numpy as np
 
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 from ._results import fields_of
 from .test_gpu_kernel_emulation import emulated_gpu

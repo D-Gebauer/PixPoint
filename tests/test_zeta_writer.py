@@ -25,13 +25,13 @@ import h5py
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import (
+from pixpoint import (
     Integrated3PCF,
     IntegratedResult,
     ZetaWriter,
     calculate_all_zetas,
 )
-from CosmoFuse.multi_device import MultiDeviceIntegrated3PCF
+from pixpoint.multi_device import MultiDeviceIntegrated3PCF
 
 NSIDE = 16
 NPIX = hp.nside2npix(NSIDE)
@@ -222,7 +222,7 @@ class TestStreamedReduction(ZetaWriterBase):
             "theta_max",
             "level_table",
             "row_pix_hash",
-            "cosmofuse_version",
+            "pixpoint_version",
         ):
             self.assertIn(key, attrs)
         self.assertEqual(int(attrs["nside"]), NSIDE)
@@ -270,7 +270,7 @@ class TestDurability(ZetaWriterBase):
             sys.path.insert(0, {os.getcwd()!r})
             import numpy as np
             from tests.test_zeta_writer import make_corr, make_maps
-            from CosmoFuse import ZetaWriter
+            from pixpoint import ZetaWriter
             corr = make_corr()
             out = ZetaWriter({self.path!r}, corr, flush_every=2)
             for g, w in make_maps(corr):

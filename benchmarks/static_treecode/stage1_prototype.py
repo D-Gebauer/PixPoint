@@ -1,6 +1,6 @@
 """Stage 1 science gate: what does per-bin coarsening do to the statistics?
 
-Standalone prototype (numpy/numba/healpy/pyccl; does not use the CosmoFuse
+Standalone prototype (numpy/numba/healpy/pyccl; does not use the PixPoint
 measurement code, only re-implements its pair geometry) that measures, on
 nside-2048 maps with the real DES Y3 mask, the patch-level xi+, xi-, gamma_t
 and xi_g
@@ -40,7 +40,7 @@ NSTAT = 8  # xip, xim, ss_den, xit, ds_den, xig, dd_den, npairs
 
 
 # --------------------------------------------------------------------------
-# geometry (same formulas as CosmoFuse.correlations._compute_pairs_impl)
+# geometry (same formulas as pixpoint.correlations._compute_pairs_impl)
 # --------------------------------------------------------------------------
 @njit(cache=True, inline="always")
 def pair_rot(x1, y1, z1, x2, y2, z2):
@@ -277,7 +277,7 @@ def main() -> None:
     ap.add_argument("--out", default="results/stage1.npz")
     args = ap.parse_args()
 
-    from CosmoFuse.utils import select_patch_centers
+    from pixpoint.utils import select_patch_centers
 
     rng = np.random.default_rng(args.seed)
     lmax = 3 * NSIDE - 1

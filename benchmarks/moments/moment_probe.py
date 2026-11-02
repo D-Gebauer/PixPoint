@@ -28,7 +28,7 @@ References, measured on the same pair lists:
 Usage (A100):  python moment_probe.py --nside 1024 --npatch 200 --k 2 4 --out results/probe_1024.json
 Local CPU smoke test of the formulas (numpy twins of the kernels):
                python moment_probe.py --device cpu --nside 128 --npatch 3 --theta-min 60 --theta-max 400
-                      --nbins 5 --Q 200 --k 2 --synthetic --centres auto --no-cosmofuse-timing
+                      --nbins 5 --Q 200 --k 2 --synthetic --centres auto --no-pixpoint-timing
 """
 import argparse
 import gc
@@ -44,7 +44,7 @@ import scipy.sparse as sp
 P = "/project/ocean1-seitz/users/dgebauer"
 DEFAULT_MASK = f"{P}/research/CosmoFuse-treecode-data/DESY3_Mask.fits"
 DEFAULT_KAPPA = f"{P}/sbi/convergence_maps/fiducial/cosmo_fiducial/nzmap_0000.npy"
-DEFAULT_CENTRES = f"{P}/sbi/CosmoFuse/Q90/patch_center_original_{{}}.dat"
+DEFAULT_CENTRES = f"{P}/sbi/pixpoint/Q90/patch_center_original_{{}}.dat"
 
 VARIANTS = {"mono": 0, "dipole": 1, "quad": 2}
 NM_OF = {0: 1, 1: 3, 2: 6}
@@ -113,7 +113,7 @@ __device__ __forceinline__ float2 pair_factor(
 
 // One block row (blockIdx.x) per group = (patch, bin); gridDim.y blocks share a group.
 // out[group][comb][3] = (xi+ numerator, xi- numerator, sum of weights), both orientations of a
-// cross combination summed, auto combinations once (CosmoFuse's convention).
+// cross combination summed, auto combinations once (PixPoint's convention).
 template <int NZ, int VAR>
 __global__ void pair_sums(
     const int* __restrict__ node_i, const int* __restrict__ node_j,
@@ -294,7 +294,7 @@ def kappa_to_shear(kappa, nside):
 
 
 class Nodes:
-    """Row-space pixels followed by the treecode cells of every level (CosmoFuse's virtual
+    """Row-space pixels followed by the treecode cells of every level (PixPoint's virtual
     row order), with unit vectors, the cell -> pixel-row CSR and the moment operators."""
 
     def __init__(self, corr):
@@ -391,7 +391,7 @@ class Nodes:
 
 
 def pair_arrays(corr, nodes):
-    """All patches' pairs as node indices, grouped by (patch, bin) = CosmoFuse's host order."""
+    """All patches' pairs as node indices, grouped by (patch, bin) = PixPoint's host order."""
     counts = np.array([np.asarray(b, dtype=np.int64) for b in corr.bins])      # (npatch, nbins)
     offsets = np.concatenate(([0], np.cumsum(counts.ravel()))).astype(np.int64)
     N = int(offsets[-1])
@@ -596,8 +596,8 @@ def compare(x, ref, nbins):
     }
 
 
-def measure_cosmofuse(dev, corr, shear, w, flip_g1, timing):
-    """CosmoFuse's gg: per-patch xi+, xi- and (optionally) timings."""
+def measure_pixpoint(dev, corr, shear, w, flip_g1, timing):
+    """PixPoint's gg: per-patch xi+, xi- and (optionally) timings."""
     xp = dev.xp
     res = corr.gg(shear, w, apertures=False, flip_g1=flip_g1, return_device=False)
     xi_p, xi_m = np.asarray(res.xi_p[0], dtype=np.float64), np.asarray(res.xi_m[0], dtype=np.float64)
@@ -616,7 +616,7 @@ def measure_cosmofuse(dev, corr, shear, w, flip_g1, timing):
 
 
 def make_corr(args, mask, phi_c, theta_c, k, pack=False):
-    from CosmoFuse import Integrated3PCF
+    from pixpoint import Integrated3PCF
 
     return Integrated3PCF(
         args.nside, phi_c, theta_c, nbins=args.nbins, theta_min=args.theta_min, theta_max=args.theta_max,
@@ -643,7 +643,7 @@ def main():
     ap.add_argument("--synthetic", action="store_true", help="Gaussian kappa instead of the CosmoGrid map")
     ap.add_argument("--noise", type=float, default=0.0,
                     help="shape noise per pixel and component added to the shear (DES-like: 0.064 at nside 1024)")
-    ap.add_argument("--no-cosmofuse-timing", action="store_true")
+    ap.add_argument("--no-pixpoint-timing", action="store_true")
     ap.add_argument("--nz-speed", type=int, nargs="*", default=[1, 4], help="nz values for the kernel timings")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -656,7 +656,7 @@ def main():
     m = hp.read_map(args.mask)
     mask = (hp.ud_grade(m.astype(np.float64), args.nside) if hp.npix2nside(m.size) != args.nside else m) != 0
     if args.centres == "auto":
-        from CosmoFuse.utils import select_patch_centers
+        from pixpoint.utils import select_patch_centers
 
         phi_c, theta_c = select_patch_centers(mask, 8, patch_size=args.Q, theta_Q=args.Q)
     else:
@@ -710,7 +710,7 @@ def main():
     t_pre_full = time.perf_counter() - t0
     nodes, dev_pairs, n_groups, info = evaluate(corr, "full", True)
     info["preprocess_s"] = t_pre_full
-    cf = measure_cosmofuse(dev, corr, shear_rows, w_rows, True, not args.no_cosmofuse_timing)
+    cf = measure_pixpoint(dev, corr, shear_rows, w_rows, True, not args.no_pixpoint_timing)
     cf_p, cf_m = cf["xi_p"].reshape(-1), cf["xi_m"].reshape(-1)
     best = None
     conv = {}
@@ -752,11 +752,11 @@ def main():
         "xi_p": compare(fine["xi_p"].reshape(shape), ex_p.reshape(shape), args.nbins),
         "xi_m": compare(fine["xi_m"].reshape(shape), ex_m.reshape(shape), args.nbins),
     }
-    info["probe_vs_cosmofuse"] = {
+    info["probe_vs_pixpoint"] = {
         "xi_p": compare(fine["xi_p"].reshape(shape), cf_p.reshape(shape), args.nbins),
         "xi_m": compare(fine["xi_m"].reshape(shape), cf_m.reshape(shape), args.nbins),
     }
-    info["cosmofuse"] = {k_: v for k_, v in cf.items() if k_.endswith("_ms")}
+    info["pixpoint"] = {k_: v for k_, v in cf.items() if k_.endswith("_ms")}
     report["full"] = info
     print("full", json.dumps({k_: v for k_, v in info.items() if "vs" not in k_}), flush=True)
     fine_p, fine_m = ex_p.reshape(shape), ex_m.reshape(shape)       # double-precision reference
@@ -774,13 +774,13 @@ def main():
         t_pre = time.perf_counter() - t0
         nodes, dev_pairs, n_groups, info = evaluate(corr, f"k={k:g}", False)
         info["preprocess_s"] = t_pre
-        cf = measure_cosmofuse(dev, corr, shear_rows, w_rows, True, not args.no_cosmofuse_timing)
-        info["cosmofuse"] = {k_: v for k_, v in cf.items() if k_.endswith("_ms")}
-        if dev.gpu and not args.no_cosmofuse_timing:
+        cf = measure_pixpoint(dev, corr, shear_rows, w_rows, True, not args.no_pixpoint_timing)
+        info["pixpoint"] = {k_: v for k_, v in cf.items() if k_.endswith("_ms")}
+        if dev.gpu and not args.no_pixpoint_timing:
             cp_ = make_corr(args, mask, phi_c, theta_c, k, pack=True)
             cp_.preprocess(release_host_pairs=True)
-            cfp = measure_cosmofuse(dev, cp_, shear_rows, w_rows, True, True)
-            info["cosmofuse_packed"] = {k_: v for k_, v in cfp.items() if k_.endswith("_ms")}
+            cfp = measure_pixpoint(dev, cp_, shear_rows, w_rows, True, True)
+            info["pixpoint_packed"] = {k_: v for k_, v in cfp.items() if k_.endswith("_ms")}
             del cp_
             gc.collect()
             xp.get_default_memory_pool().free_all_blocks()
@@ -790,7 +790,7 @@ def main():
         info["target_s"] = time.perf_counter() - t0
         tg_p, tg_m = (v.reshape(shape) for v in ratios(target))
         results = {"target": (tg_p, tg_m), "fine": (fine_p, fine_m),
-                   "cosmofuse": (cf["xi_p"].reshape(shape), cf["xi_m"].reshape(shape))}
+                   "pixpoint": (cf["xi_p"].reshape(shape), cf["xi_m"].reshape(shape))}
         mom_cur, W = nodes.moments(gamma_rows, w1, S, transport=False, order=0)
         mom_t, _ = nodes.moments(gamma_rows, w1, S, transport=True, order=2)
         timings = {}
@@ -808,7 +808,7 @@ def main():
                     results[name] = tuple(v.reshape(shape) for v in ratios(sums))
         info["kernel_ms"] = timings
         comp = {}
-        for name in ("cosmofuse", "mono", "mono_t", "dipole", "quad", "target"):
+        for name in ("pixpoint", "mono", "mono_t", "dipole", "quad", "target"):
             comp[name] = {}
             for ref in ("fine", "target"):
                 if name == ref:
@@ -817,16 +817,16 @@ def main():
                     "xi_p": compare(results[name][0], results[ref][0], args.nbins),
                     "xi_m": compare(results[name][1], results[ref][1], args.nbins),
                 }
-        comp["mono"]["vs_cosmofuse"] = {
-            "xi_p": compare(results["mono"][0], results["cosmofuse"][0], args.nbins),
-            "xi_m": compare(results["mono"][1], results["cosmofuse"][1], args.nbins),
+        comp["mono"]["vs_pixpoint"] = {
+            "xi_p": compare(results["mono"][0], results["pixpoint"][0], args.nbins),
+            "xi_m": compare(results["mono"][1], results["pixpoint"][1], args.nbins),
         }
         info["compare"] = comp
         info["theta_arcmin"] = (np.degrees(np.sqrt(corr.binedges[:-1] * corr.binedges[1:])) * 60).tolist()
         report["k"][f"{k:g}"] = info
         # console summary
         print(f"\n=== k = {k:g}: levels {info['level_nside']}, {info['n_pairs']:.3g} pairs ===")
-        print("timings (ms):", json.dumps({**info["cosmofuse"], **{"packed_" + a: b for a, b in info.get("cosmofuse_packed", {}).items()}, **timings}))
+        print("timings (ms):", json.dumps({**info["pixpoint"], **{"packed_" + a: b for a, b in info.get("pixpoint_packed", {}).items()}, **timings}))
         hdr = "bin  theta'  nside | " + " | ".join(f"{n:>9s}" for n in ("binning", "mono", "mono_t", "dipole", "quad"))
         print("xi- relative error of the patch mean (binning = target vs fine; variants vs target):")
         print(hdr)
@@ -846,8 +846,8 @@ def main():
                 c = comp[n]["vs_target"]["xi_m"]
                 cells.append(f"{c['corrcoef_per_patch_per_bin'][b]:7.4f} {c['std_ratio_per_bin'][b]:6.3f}")
             print(f"{b:3d} {info['theta_arcmin'][b]:7.1f} {info['level_nside'][b]:5d} | " + " | ".join(cells))
-        print("mono vs CosmoFuse gg(k): max |d xi-| per patch in sigma_patch =",
-              f"{comp['mono']['vs_cosmofuse']['xi_m']['per_patch_in_sigma_max']:.2e}", flush=True)
+        print("mono vs PixPoint gg(k): max |d xi-| per patch in sigma_patch =",
+              f"{comp['mono']['vs_pixpoint']['xi_m']['per_patch_in_sigma_max']:.2e}", flush=True)
         if args.out:
             os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
             with open(args.out, "w") as fp:

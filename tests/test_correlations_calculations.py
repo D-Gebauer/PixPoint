@@ -9,8 +9,8 @@ from unittest.mock import patch
 import numpy as np
 from scipy.special import binom
 
-from CosmoFuse.correlations import Integrated3PCF
-from CosmoFuse.pair_geometry import PairGeometry
+from pixpoint.correlations import Integrated3PCF
+from pixpoint.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -438,7 +438,7 @@ class TestCorrelationCalculations(unittest.TestCase):
         try:
             # get_backend imports cupy when called, so the fake is picked up
             # without reloading the package.
-            module = importlib.import_module("CosmoFuse.backend")
+            module = importlib.import_module("pixpoint.backend")
             backend = module.get_backend("gpu")
             self.assertIsNotNone(backend.xipm_cross_corr_kernel)
             self.assertIsNotNone(backend.aperture_density_kernel)

@@ -1,4 +1,4 @@
-"""The typed launch layer (``CosmoFuse.backend.raw``).
+"""The typed launch layer (``pixpoint.backend.raw``).
 
 Every CUDA launch is checked against the signature parsed from its ``.cu``
 source, so a wrapper and its kernel cannot disagree on argument order,
@@ -10,7 +10,7 @@ import unittest
 
 import numpy as np
 
-from CosmoFuse.backend.raw import (
+from pixpoint.backend.raw import (
     _CUDA_DIR,
     KernelFile,
     TypedKernel,

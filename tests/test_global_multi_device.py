@@ -23,8 +23,8 @@ import warnings
 import numpy as np
 import pytest
 
-from CosmoFuse import Global2PCF, Global3PCF
-from CosmoFuse.multi_device import balanced_ranges, require_host_arrays
+from pixpoint import Global2PCF, Global3PCF
+from pixpoint.multi_device import balanced_ranges, require_host_arrays
 
 from . import test_global_2pcf as g2
 from . import test_global_3pcf as g3

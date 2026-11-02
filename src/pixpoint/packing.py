@@ -52,7 +52,7 @@ def encode_angles(exp2phi: np.ndarray) -> np.ndarray:
     Always at float64: the angle of a complex64 value is computed exactly
     enough there that the code is the nearest one, whereas a float32
     ``arctan2`` (whose last bit depends on numpy's SIMD path, i.e. on the CPU)
-    picked the neighbouring code for ~0.07 % of real pairs (CosmoFuse <= 7.2.0).
+    picked the neighbouring code for ~0.07 % of real pairs (PixPoint <= 7.2.0).
     """
     angle = np.angle(np.asarray(exp2phi).astype(np.complex128, copy=False))
     steps = np.rint(angle / ANGLE_UNIT).astype(np.int64)

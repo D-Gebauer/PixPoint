@@ -5,7 +5,7 @@ CPU: Numba kernels.  GPU: ``cuda/moment_rows.cu`` (the moment builder) and
 the ``*_mom`` combination tiles of ``cuda/pair_tiles.cuh`` behind the
 ``gpu_tiled_{tomo,packed}_reduce_{xipm,ds,3x2pt}_mom`` kernels.
 
-Contract shared by both backends (see ``CosmoFuse.moments`` for the
+Contract shared by both backends (see ``pixpoint.moments`` for the
 derivation and the sign convention):
 
 * a cell row ``c = row - n_active`` carries, per tomographic bin, ``NM``

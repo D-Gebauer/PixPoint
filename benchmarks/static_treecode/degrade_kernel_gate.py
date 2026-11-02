@@ -18,7 +18,7 @@ import time
 import healpy as hp
 import numpy as np
 
-from CosmoFuse import Integrated3PCF
+from pixpoint import Integrated3PCF
 
 
 def fields_of(result, *names):

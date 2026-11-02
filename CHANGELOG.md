@@ -2,6 +2,17 @@
 
 ## 8.0.0 (unreleased)
 
+**Renamed: CosmoFuse is now PixPoint.** The distribution and the import are
+`pixpoint` (`pip install pixpoint`, `from pixpoint import Global2PCF`); there
+is no `CosmoFuse` alias package, so `import CosmoFuse` becomes `import
+pixpoint` and nothing else changes in the API. The repository moved to
+`github.com/D-Gebauer/PixPoint` (GitHub redirects the old URL) and the
+documentation to `pixpoint.readthedocs.io`. Pair files written by
+`Global2PCF` / `Global3PCF` carry the new `kind` strings
+`pixpoint.Global2PCF` / `pixpoint.Global3PCF`; files with the old names are
+still read. The HDF5 writers store `pixpoint_version` instead of
+`cosmofuse_version`. Earlier entries of this changelog keep the old name.
+
 **Breaking.** Stage A of the 8.0.0 plan (`RELEASE_8.0.0_GUIDE.md`): the
 estimators lose the two pieces of error estimation they had grown.
 CosmoFuse measures; covariances, jackknives and projections are the

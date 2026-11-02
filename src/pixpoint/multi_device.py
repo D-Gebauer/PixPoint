@@ -2,7 +2,7 @@
 
 Pair geometry is per patch and the estimators are per patch, so patches are
 the natural unit of work: device ``d`` owns a contiguous range of patches and
-a :class:`~CosmoFuse.correlations.Integrated3PCF` of its own, measurement calls
+a :class:`~pixpoint.correlations.Integrated3PCF` of its own, measurement calls
 run in one thread per device (CuPy's current device is thread-local), and the
 per-patch outputs are concatenated back in patch order.  The result is
 identical to a single-device run -- the patch axis is just assembled from
@@ -20,8 +20,8 @@ Use it through ``Integrated3PCF(..., device=[0, 1])``::
     res = corr.gg(shear, w)                # res.M_a, res.xi_p, res.xi_m
 
 The footprint-wide estimators split the same way with their own unit of
-work -- tiles for :class:`~CosmoFuse.global_2pcf.Global2PCF`, centres for
-:class:`~CosmoFuse.global_3pcf.Global3PCF` -- through the helpers below.
+work -- tiles for :class:`~pixpoint.global_2pcf.Global2PCF`, centres for
+:class:`~pixpoint.global_3pcf.Global3PCF` -- through the helpers below.
 """
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple

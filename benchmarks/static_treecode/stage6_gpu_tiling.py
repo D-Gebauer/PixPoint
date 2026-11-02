@@ -4,7 +4,7 @@ Interleaved A/B rounds on (a) the production nside-512 full-resolution
 geometry with real maps and (b) the nside-2048 treecode geometry."""
 import argparse, json, time
 import h5py, healpy as hp, numpy as np
-from CosmoFuse.correlations import Integrated3PCF
+from pixpoint.correlations import Integrated3PCF
 
 
 def fields_of(result, *names):
@@ -55,11 +55,11 @@ def main():
     if "A" in args.parts:
         nside = 512
         des_map = hp.ud_grade(hp.read_map(MASK), nside)
-        pair_file = f"{SBI}/CosmoFuse/Q110/2PCF_pairs_512_15_250_8.h5"
+        pair_file = f"{SBI}/pixpoint/Q110/2PCF_pairs_512_15_250_8.h5"
         with h5py.File(pair_file, "r") as fp:
             attrs = dict(fp.attrs)
-        phi = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_phi.dat")
-        theta = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_theta.dat")
+        phi = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_phi.dat")
+        theta = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_theta.dat")
         cut = np.load(f"{SBI}/shear_maps/grid_baryonified/4BINS/gamma_0000.npy").reshape(-1, 4, 2, 369190)[0]
         w = np.load(f"{SBI}/shear_maps/SumOfWeights_512.npy")
         for mp, acc in (("float32", "float64"), ("float64", "same")):
@@ -81,8 +81,8 @@ def main():
         if hp.npix2nside(mask.size) != nside:
             mask = hp.ud_grade(mask.astype(np.float64), nside)
         mask = mask != 0
-        phi = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_phi.dat")
-        theta = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_theta.dat")
+        phi = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_phi.dat")
+        theta = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_theta.dat")
         edges = np.geomspace(5.0, 250.0, 12); edges = edges[edges < 215]
         corr = Integrated3PCF(nside, phi, theta, nbins=len(edges) - 1, theta_min=edges[0], theta_max=edges[-1],
                            patch_size=110, theta_Q=110, mask=mask, device="gpu", map_precision="float32",

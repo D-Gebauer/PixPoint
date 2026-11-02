@@ -659,6 +659,28 @@ __device__ __forceinline__ void moment_factor(
     }
 }
 
+/* Upper-triangle index of the (min(t, u), max(t, u)) combination among NS
+   bins, in the row-major order the plain tiles use; folds to a constant once
+   the bin loops are unrolled, so the accumulators stay in registers. */
+__device__ __forceinline__ constexpr int tri_index(int ns, int t, int u)
+{
+    return (t < u ? t : u) * ns - ((t < u ? t : u) * ((t < u ? t : u) - 1)) / 2
+         + ((t < u ? u : t) - (t < u ? t : u));
+}
+
+/*
+ * The moment tiles visit every ordered bin pair (t, u) of a cell pair and
+ * load the two ends' contractions *inside* that double loop instead of
+ * caching EndMoments[NS] per end up front: NS = 4 quad ends are 80 live
+ * values per thread on top of the accumulators, which spilled to local
+ * memory (gg 1.6 -> 5.4 ms at nside 1024, k = 4; B5).  The recompute costs
+ * NS(NS+1) end loads per pair instead of 2 NS and leaves the arithmetic of
+ * every contribution and the order in which the combinations accumulate
+ * them untouched: (t, u) with t < u adds the a->b orientation before
+ * (u, t) adds b->a, exactly as the k-loop did, so the sums are bitwise the
+ * old ones.
+ */
+
 /* xi+ / xi- with the moment correction; layouts as tile_xipm. */
 template<typename T, int NS, typename ACC, typename P, int MOM>
 __device__ __forceinline__ void tile_xipm_mom(
@@ -687,39 +709,29 @@ __device__ __forceinline__ void tile_xipm_mom(
         const T rabc_R = ra_R * rb_R + ra_I * rb_I, rabc_I = ra_I * rb_R - ra_R * rb_I;
         const T pax = -s_a, pay = c_a, qax = c_a, qay = s_a;
         const T pbx = s_b, pby = -c_b, qbx = -c_b, qby = -s_b;
+        const T* mom_a = mom + cell_a * NS * (2 * NM);
+        const T* mom_b = mom + cell_b * NS * (2 * NM);
 
-        EndMoments<T, MOM> ea[NS], eb[NS];
-        T w_a[NS], w_b[NS];
+#pragma unroll
         for (int t = 0; t < NS; ++t) {
-            const long long ia = row_a * NS + t, ib = row_b * NS + t;
-            ea[t].load(mom + (cell_a * NS + t) * (2 * NM), shear[2 * ia], shear[2 * ia + 1],
-                       pax, pay, qax, qay);
-            eb[t].load(mom + (cell_b * NS + t) * (2 * NM), shear[2 * ib], shear[2 * ib + 1],
-                       pbx, pby, qbx, qby);
-            w_a[t] = weights[ia];
-            w_b[t] = weights[ib];
-        }
-
-        int k = 0;
-        for (int i = 0; i < NS; ++i) {
-            for (int j = i; j < NS; ++j, ++k) {
+            const long long ia = row_a * NS + t;
+            EndMoments<T, MOM> ea;
+            ea.load(mom_a + t * (2 * NM), shear[2 * ia], shear[2 * ia + 1], pax, pay, qax, qay);
+            const T w_at = weights[ia];
+#pragma unroll
+            for (int u = 0; u < NS; ++u) {
+                const long long ib = row_b * NS + u;
+                EndMoments<T, MOM> eb;
+                eb.load(mom_b + u * (2 * NM), shear[2 * ib], shear[2 * ib + 1], pbx, pby, qbx, qby);
+                const int k = tri_index(NS, t, u);
                 T F_r, F_i;
-                moment_factor<T, MOM>(ea[i], eb[j], (T)4, idd, F_r, F_i);
-                const T G_r = ea[i].M_r * eb[j].M_r + ea[i].M_i * eb[j].M_i;
-                const T G_i = ea[i].M_i * eb[j].M_r - ea[i].M_r * eb[j].M_i;
-                const T w_ab = w_a[i] * w_b[j];
+                moment_factor<T, MOM>(ea, eb, (T)4, idd, F_r, F_i);
+                const T G_r = ea.M_r * eb.M_r + ea.M_i * eb.M_i;
+                const T G_i = ea.M_i * eb.M_r - ea.M_r * eb.M_i;
+                const T w_ab = w_at * weights[ib];
                 acc_w[k] += (ACC)w_ab;
                 acc_p[k] += (ACC)(w_ab * (G_r * rabc_R - G_i * rabc_I));
                 acc_m[k] += (ACC)(w_ab * (F_r * rab_R - F_i * rab_I));
-                if (i != j) {
-                    moment_factor<T, MOM>(ea[j], eb[i], (T)4, idd, F_r, F_i);
-                    const T H_r = ea[j].M_r * eb[i].M_r + ea[j].M_i * eb[i].M_i;
-                    const T H_i = ea[j].M_i * eb[i].M_r - ea[j].M_r * eb[i].M_i;
-                    const T w_ba = w_a[j] * w_b[i];
-                    acc_w[k] += (ACC)w_ba;
-                    acc_p[k] += (ACC)(w_ba * (H_r * rabc_R - H_i * rabc_I));
-                    acc_m[k] += (ACC)(w_ba * (F_r * rab_R - F_i * rab_I));
-                }
             }
         }
     }
@@ -777,40 +789,36 @@ __device__ __forceinline__ void tile_ds_mom(
         const T paJx = s_a, paJy = -c_a, qaJx = -c_a, qaJy = -s_a;
         const T pbIx = -s_b, pbIy = c_b, qbIx = c_b, qbIy = s_b;
         const T pbJx = s_b, pbJy = -c_b, qbJx = -c_b, qbJy = -s_b;
+        const T* lens_a = mom_lens + cell_a * ND * (2 * NM);
+        const T* lens_b = mom_lens + cell_b * ND * (2 * NM);
+        const T* src_a = mom_src + cell_a * NS * (2 * NM);
+        const T* src_b = mom_src + cell_b * NS * (2 * NM);
 
         /* lenses: a and b as the I end; sources: a and b as the J end */
-        EndMoments<T, MOM> la[ND], lb[ND], sa[NS], sb[NS];
-        T dw_a[ND], dw_b[ND], sw_a[NS], sw_b[NS];
+#pragma unroll
         for (int l = 0; l < ND; ++l) {
             const long long ia = row_a * ND + l, ib = row_b * ND + l;
-            la[l].load(mom_lens + (cell_a * ND + l) * (2 * NM), density[ia], (T)0,
-                       paIx, paIy, qaIx, qaIy);
-            lb[l].load(mom_lens + (cell_b * ND + l) * (2 * NM), density[ib], (T)0,
-                       pbIx, pbIy, qbIx, qbIy);
-            dw_a[l] = lens_w[ia];
-            dw_b[l] = lens_w[ib];
-        }
-        for (int s = 0; s < NS; ++s) {
-            const long long ia = row_a * NS + s, ib = row_b * NS + s;
-            sa[s].load(mom_src + (cell_a * NS + s) * (2 * NM), shear[2 * ia], shear[2 * ia + 1],
-                       paJx, paJy, qaJx, qaJy);
-            sb[s].load(mom_src + (cell_b * NS + s) * (2 * NM), shear[2 * ib], shear[2 * ib + 1],
-                       pbJx, pbJy, qbJx, qbJy);
-            sw_a[s] = source_w[ia];
-            sw_b[s] = source_w[ib];
-        }
-
-        for (int l = 0; l < ND; ++l) {
+            EndMoments<T, MOM> la, lb;
+            la.load(lens_a + l * (2 * NM), density[ia], (T)0, paIx, paIy, qaIx, qaIy);
+            lb.load(lens_b + l * (2 * NM), density[ib], (T)0, pbIx, pbIy, qbIx, qbIy);
+            const T dw_a = lens_w[ia], dw_b = lens_w[ib];
+#pragma unroll
             for (int s = 0; s < NS; ++s) {
+                const long long ja = row_a * NS + s, jb = row_b * NS + s;
+                EndMoments<T, MOM> sa, sb;
+                sa.load(src_a + s * (2 * NM), shear[2 * ja], shear[2 * ja + 1],
+                        paJx, paJy, qaJx, qaJy);
+                sb.load(src_b + s * (2 * NM), shear[2 * jb], shear[2 * jb + 1],
+                        pbJx, pbJy, qbJx, qbJy);
                 const int k = l * NS + s;
                 /* a = lens, b = source */
-                const T w_ab = dw_a[l] * sw_b[s];
+                const T w_ab = dw_a * source_w[jb];
                 acc_w[k] += (ACC)w_ab;
-                acc_n[k] += (ACC)(w_ab * gammat_mom<T, MOM>(la[l], sb[s], rb_R, rb_I, idd));
+                acc_n[k] += (ACC)(w_ab * gammat_mom<T, MOM>(la, sb, rb_R, rb_I, idd));
                 /* b = lens, a = source */
-                const T w_ba = dw_b[l] * sw_a[s];
+                const T w_ba = dw_b * source_w[ja];
                 acc_w[k] += (ACC)w_ba;
-                acc_n[k] += (ACC)(w_ba * gammat_mom<T, MOM>(lb[l], sa[s], ra_R, ra_I, idd));
+                acc_n[k] += (ACC)(w_ba * gammat_mom<T, MOM>(lb, sa, ra_R, ra_I, idd));
             }
         }
     }
@@ -870,84 +878,82 @@ __device__ __forceinline__ void tile_multi_mom(
         const T paJx = s_a, paJy = -c_a, qaJx = -c_a, qaJy = -s_a;
         const T pbIx = -s_b, pbIy = c_b, qbIx = c_b, qbIy = s_b;
         const T pbJx = s_b, pbJy = -c_b, qbJx = -c_b, qbJy = -s_b;
+        const T* lens_a = mom_lens + cell_a * ND * (2 * NM);
+        const T* lens_b = mom_lens + cell_b * ND * (2 * NM);
+        const T* src_a = mom_src + cell_a * NS * (2 * NM);
+        const T* src_b = mom_src + cell_b * NS * (2 * NM);
 
-        /* shear: a as the I end, b as the J end (xi+-); and a as a J end
-           for the b-lens orientation of xi_t */
-        EndMoments<T, MOM> sa_I[NS], sb_J[NS], sa_J[NS];
-        T w_a[NS], w_b[NS];
+        /* xi+-: shear a as the I end, b as the J end */
+#pragma unroll
         for (int t = 0; t < NS; ++t) {
-            const long long ia = row_a * NS + t, ib = row_b * NS + t;
-            const T* ma = mom_src + (cell_a * NS + t) * (2 * NM);
-            const T* mb = mom_src + (cell_b * NS + t) * (2 * NM);
-            sa_I[t].load(ma, shear[2 * ia], shear[2 * ia + 1], paIx, paIy, qaIx, qaIy);
-            sa_J[t].load(ma, shear[2 * ia], shear[2 * ia + 1], paJx, paJy, qaJx, qaJy);
-            sb_J[t].load(mb, shear[2 * ib], shear[2 * ib + 1], pbJx, pbJy, qbJx, qbJy);
-            w_a[t] = shear_w[ia];
-            w_b[t] = shear_w[ib];
-        }
-        EndMoments<T, MOM> la[ND], lb[ND];
-        T d_a[ND], d_b[ND], dw_a[ND], dw_b[ND];
-        for (int l = 0; l < ND; ++l) {
-            const long long ia = row_a * ND + l, ib = row_b * ND + l;
-            d_a[l] = density[ia];
-            d_b[l] = density[ib];
-            dw_a[l] = density_w[ia];
-            dw_b[l] = density_w[ib];
-            la[l].load(mom_lens + (cell_a * ND + l) * (2 * NM), d_a[l], (T)0,
-                       paIx, paIy, qaIx, qaIy);
-            lb[l].load(mom_lens + (cell_b * ND + l) * (2 * NM), d_b[l], (T)0,
-                       pbIx, pbIy, qbIx, qbIy);
-        }
-
-        {
-            int k = 0;
-            for (int i = 0; i < NS; ++i) {
-                for (int j = i; j < NS; ++j, ++k) {
-                    T F_r, F_i;
-                    moment_factor<T, MOM>(sa_I[i], sb_J[j], (T)4, idd, F_r, F_i);
-                    const T G_r = sa_I[i].M_r * sb_J[j].M_r + sa_I[i].M_i * sb_J[j].M_i;
-                    const T G_i = sa_I[i].M_i * sb_J[j].M_r - sa_I[i].M_r * sb_J[j].M_i;
-                    const T w_ab = w_a[i] * w_b[j];
-                    ss_w[k] += (ACC)w_ab;
-                    ss_p[k] += (ACC)(w_ab * (G_r * rabc_R - G_i * rabc_I));
-                    ss_m[k] += (ACC)(w_ab * (F_r * rab_R - F_i * rab_I));
-                    if (i != j) {
-                        moment_factor<T, MOM>(sa_I[j], sb_J[i], (T)4, idd, F_r, F_i);
-                        const T H_r = sa_I[j].M_r * sb_J[i].M_r + sa_I[j].M_i * sb_J[i].M_i;
-                        const T H_i = sa_I[j].M_i * sb_J[i].M_r - sa_I[j].M_r * sb_J[i].M_i;
-                        const T w_ba = w_a[j] * w_b[i];
-                        ss_w[k] += (ACC)w_ba;
-                        ss_p[k] += (ACC)(w_ba * (H_r * rabc_R - H_i * rabc_I));
-                        ss_m[k] += (ACC)(w_ba * (F_r * rab_R - F_i * rab_I));
-                    }
-                }
+            const long long ia = row_a * NS + t;
+            EndMoments<T, MOM> sa_I;
+            sa_I.load(src_a + t * (2 * NM), shear[2 * ia], shear[2 * ia + 1],
+                      paIx, paIy, qaIx, qaIy);
+            const T w_at = shear_w[ia];
+#pragma unroll
+            for (int u = 0; u < NS; ++u) {
+                const long long ib = row_b * NS + u;
+                EndMoments<T, MOM> sb_J;
+                sb_J.load(src_b + u * (2 * NM), shear[2 * ib], shear[2 * ib + 1],
+                          pbJx, pbJy, qbJx, qbJy);
+                const int k = tri_index(NS, t, u);
+                T F_r, F_i;
+                moment_factor<T, MOM>(sa_I, sb_J, (T)4, idd, F_r, F_i);
+                const T G_r = sa_I.M_r * sb_J.M_r + sa_I.M_i * sb_J.M_i;
+                const T G_i = sa_I.M_i * sb_J.M_r - sa_I.M_r * sb_J.M_i;
+                const T w_ab = w_at * shear_w[ib];
+                ss_w[k] += (ACC)w_ab;
+                ss_p[k] += (ACC)(w_ab * (G_r * rabc_R - G_i * rabc_I));
+                ss_m[k] += (ACC)(w_ab * (F_r * rab_R - F_i * rab_I));
             }
         }
+
+        /* xi_g: plain */
         {
             int k = 0;
             for (int i = 0; i < ND; ++i) {
+                const long long ia = row_a * ND + i, ib_i = row_b * ND + i;
+                const T d_ai = density[ia], d_bi = density[ib_i];
+                const T dw_ai = density_w[ia], dw_bi = density_w[ib_i];
                 const int j_stop = DD_AUTO_ONLY ? (i + 1) : ND;
                 for (int j = i; j < j_stop; ++j, ++k) {
-                    const T w_ab = dw_a[i] * dw_b[j];
+                    const long long ja = row_a * ND + j, jb = row_b * ND + j;
+                    const T w_ab = dw_ai * density_w[jb];
                     dd_w[k] += (ACC)w_ab;
-                    dd_n[k] += (ACC)(w_ab * d_a[i] * d_b[j]);
+                    dd_n[k] += (ACC)(w_ab * d_ai * density[jb]);
                     if (i != j) {
-                        const T w_ba = dw_a[j] * dw_b[i];
+                        const T w_ba = density_w[ja] * dw_bi;
                         dd_w[k] += (ACC)w_ba;
-                        dd_n[k] += (ACC)(w_ba * d_a[j] * d_b[i]);
+                        dd_n[k] += (ACC)(w_ba * density[ja] * d_bi);
                     }
                 }
             }
         }
+
+        /* xi_t: lenses as the I end, sources as the J end */
+#pragma unroll
         for (int l = 0; l < ND; ++l) {
+            const long long ia = row_a * ND + l, ib = row_b * ND + l;
+            EndMoments<T, MOM> la, lb;
+            la.load(lens_a + l * (2 * NM), density[ia], (T)0, paIx, paIy, qaIx, qaIy);
+            lb.load(lens_b + l * (2 * NM), density[ib], (T)0, pbIx, pbIy, qbIx, qbIy);
+            const T dw_a = density_w[ia], dw_b = density_w[ib];
+#pragma unroll
             for (int s = 0; s < NS; ++s) {
+                const long long ja = row_a * NS + s, jb = row_b * NS + s;
+                EndMoments<T, MOM> sa_J, sb_J;
+                sa_J.load(src_a + s * (2 * NM), shear[2 * ja], shear[2 * ja + 1],
+                          paJx, paJy, qaJx, qaJy);
+                sb_J.load(src_b + s * (2 * NM), shear[2 * jb], shear[2 * jb + 1],
+                          pbJx, pbJy, qbJx, qbJy);
                 const int k = l * NS + s;
-                const T w_ab = dw_a[l] * w_b[s];
+                const T w_ab = dw_a * shear_w[jb];
                 ds_w[k] += (ACC)w_ab;
-                ds_n[k] += (ACC)(w_ab * gammat_mom<T, MOM>(la[l], sb_J[s], rb_R, rb_I, idd));
-                const T w_ba = dw_b[l] * w_a[s];
+                ds_n[k] += (ACC)(w_ab * gammat_mom<T, MOM>(la, sb_J, rb_R, rb_I, idd));
+                const T w_ba = dw_b * shear_w[ja];
                 ds_w[k] += (ACC)w_ba;
-                ds_n[k] += (ACC)(w_ba * gammat_mom<T, MOM>(lb[l], sa_J[s], ra_R, ra_I, idd));
+                ds_n[k] += (ACC)(w_ba * gammat_mom<T, MOM>(lb, sa_J, ra_R, ra_I, idd));
             }
         }
     }

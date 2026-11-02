@@ -1,0 +1,182 @@
+{
+ "args": {
+  "nside": 1024,
+  "npatch": 200,
+  "k": [
+   4.0
+  ],
+  "theta_min": 7.0,
+  "theta_max": 123.0,
+  "nbins": 9,
+  "Q": 90.0,
+  "aperture_nside": [
+   256
+  ],
+  "nz": [
+   4
+  ],
+  "mask": "/project/ocean1-seitz/users/dgebauer/research/CosmoFuse-treecode-data/DESY3_Mask.fits",
+  "device": "gpu",
+  "out": "benchmarks/moments/results/bench_1024_b5.json"
+ },
+ "n_patches": 69,
+ "n_active": 1434496,
+ "runs": [
+  {
+   "nz": 4,
+   "k": 4.0,
+   "pack_pairs": false,
+   "cell_moments": null,
+   "preprocess_s": 13.103557126130909,
+   "pairs": 20086080,
+   "levels": [
+    1024,
+    1024,
+    1024,
+    1024,
+    1024,
+    512,
+    512,
+    256,
+    256
+   ],
+   "gg_pairs_ms": 2.553576836362481,
+   "kg_ms": 3.4380899742245674,
+   "three_by_two_pt_ms": 4.044302040711045
+  },
+  {
+   "nz": 4,
+   "k": 4.0,
+   "pack_pairs": false,
+   "cell_moments": "dipole",
+   "preprocess_s": 1.5510347089730203,
+   "pairs": 20086080,
+   "levels": [
+    1024,
+    1024,
+    1024,
+    1024,
+    1024,
+    512,
+    512,
+    256,
+    256
+   ],
+   "gg_pairs_ms": 2.4094469845294952,
+   "kg_ms": 4.186492878943682,
+   "three_by_two_pt_ms": 5.064093973487616
+  },
+  {
+   "nz": 4,
+   "k": 4.0,
+   "pack_pairs": false,
+   "cell_moments": "quad",
+   "preprocess_s": 1.5212185091804713,
+   "pairs": 20086080,
+   "levels": [
+    1024,
+    1024,
+    1024,
+    1024,
+    1024,
+    512,
+    512,
+    256,
+    256
+   ],
+   "gg_pairs_ms": 3.71890002861619,
+   "kg_ms": 5.029125139117241,
+   "three_by_two_pt_ms": 6.993348011747003
+  },
+  {
+   "nz": 4,
+   "k": 4.0,
+   "pack_pairs": true,
+   "cell_moments": null,
+   "preprocess_s": 1.565223848912865,
+   "pairs": 20086080,
+   "levels": [
+    1024,
+    1024,
+    1024,
+    1024,
+    1024,
+    512,
+    512,
+    256,
+    256
+   ],
+   "gg_pairs_ms": 2.023140899837017,
+   "kg_ms": 3.445147071033716,
+   "three_by_two_pt_ms": 3.860844997689128
+  },
+  {
+   "nz": 4,
+   "k": 4.0,
+   "pack_pairs": true,
+   "cell_moments": "dipole",
+   "preprocess_s": 1.6583519459236413,
+   "pairs": 20086080,
+   "levels": [
+    1024,
+    1024,
+    1024,
+    1024,
+    1024,
+    512,
+    512,
+    256,
+    256
+   ],
+   "gg_pairs_ms": 2.433766843751073,
+   "kg_ms": 3.7121959030628204,
+   "three_by_two_pt_ms": 5.141325993463397
+  },
+  {
+   "nz": 4,
+   "k": 4.0,
+   "pack_pairs": true,
+   "cell_moments": "quad",
+   "preprocess_s": 1.6597965729888529,
+   "pairs": 20086080,
+   "levels": [
+    1024,
+    1024,
+    1024,
+    1024,
+    1024,
+    512,
+    512,
+    256,
+    256
+   ],
+   "gg_pairs_ms": 3.196710953488946,
+   "kg_ms": 4.990729037672281,
+   "three_by_two_pt_ms": 7.0382049307227135
+  },
+  {
+   "nz": 4,
+   "aperture_nside": 256,
+   "cell_moments": null,
+   "m_a_ms": 1.361585920676589,
+   "m_g_filter_ms": 1.1811049189418554,
+   "gg_with_apertures_ms": 2.025374909862876
+  },
+  {
+   "nz": 4,
+   "aperture_nside": 256,
+   "cell_moments": "dipole",
+   "m_a_ms": 1.0256541427224874,
+   "m_g_filter_ms": 0.7344100158661604,
+   "gg_with_apertures_ms": 3.123863134533167
+  },
+  {
+   "nz": 4,
+   "aperture_nside": 256,
+   "cell_moments": "quad",
+   "m_a_ms": 1.1432538740336895,
+   "m_g_filter_ms": 1.042085001245141,
+   "gg_with_apertures_ms": 3.9396409410983324
+  }
+ ]
+}

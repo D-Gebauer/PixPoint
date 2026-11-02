@@ -255,3 +255,53 @@ a binning effect, not the moments' (an edge-splitting search would remove it; it
 measured at 5–25× the per-map cost and removed again).  k = 2 with quad (0.39 σ) does not pass
 the 0.27 σ criterion that k = 2.9 passes, so the production k stays 2.9; the ζ price of
 k = 2.9 itself falls from 0.27 to 0.20 σ_patch with the default `"quad"`.
+
+
+## B5: the register spill of the moment tiles (2026-11-03)
+
+`EndMoments[NS]` per end -- 10 live values per (end, bin), 80 at nz = 4 -- plus the float64
+accumulators spilled the quad tiles to local memory. The three moment tiles now visit every
+ordered bin pair (t, u) and load the two ends' contractions inside that double loop
+(`tri_index` folds the combination index to a constant once the loops are unrolled); the
+arithmetic of every contribution and the order in which a combination accumulates them are
+unchanged, so the sums are bitwise the old ones (GPU gates of `tests/test_cell_moments.py`
+pass). Price: NS(NS+1) end loads per pair instead of 2 NS.
+
+ptxas (`register_probe.py`, float32 maps, float64 accumulation, A100):
+
+| kernel | nz | dipole regs / local B | quad regs / local B |
+|---|---|---|---|
+| `gpu_tiled_*_reduce_xipm_mom` | 1 | 48 / 0 | 64 / 0 |
+| | 4 | 167 / 0 | 168 / 0 |
+| `gpu_tiled_*_reduce_ds_mom` | 1 | 48 / 0 | 72 / 0 |
+| | 4 | 218–250 / 0 | 255 / 32 |
+| `gpu_tiled_*_reduce_3x2pt_mom` | 1 | 64 / 0 | 95 / 0 |
+| | 4 | 255 / 112–120 | 255 / 496–504 |
+
+Timing, nside 1024, 200 patches, k = 4, nz = 4 (`results/bench_1024_b5.json` vs
+`results/bench_1024.json`), ms per call:
+
+| pack | cell_moments | gg before → after | kg | three_by_two_pt |
+|---|---|---|---|---|
+| no | None | 1.65 → 2.55 | 2.78 → 3.44 | 3.78 → 4.04 |
+| no | dipole | 2.40 → 2.41 | 3.66 → 4.19 | 5.07 → 5.06 |
+| no | quad | **5.35 → 3.72** | 5.60 → 5.03 | 8.93 → 6.99 |
+| yes | None | 1.78 → 2.02 | 2.80 → 3.45 | 3.86 → 3.86 |
+| yes | dipole | 2.41 → 2.43 | 3.77 → 3.71 | 5.11 → 5.14 |
+| yes | quad | **4.73 → 3.20** | 5.59 → 4.99 | 9.32 → 7.04 |
+
+The mono and dipole rows did not change code and show the run-to-run noise of these ~1 ms
+host-bound calls (±1 ms). Quad `gg` is now 1.3–1.6× mono instead of 3.2×; `kg` and
+`three_by_two_pt` improve by 10–25 %, less because `tile_ds_mom` still has 32 B of local
+memory and `tile_multi_mom` 500 B: its 82 float64 accumulators (10 ξ± combinations × 3,
+10 w × 2, 16 γ_t × 2) are 164 registers before any geometry. `b5_3x2pt_probe.py` measured
+the one-walk multi tile against the standalone moment tiles (three walks, no spill;
+`results/b5b_17669553.log`): quad 7.06 vs 7.17 ms (unpacked), 7.05 vs 7.17 (packed), dipole
+5.34 vs 5.08 and 5.22 vs 5.30 -- equal within the noise. The 500 B spill of the multi tile costs
+nothing measurable against the three extra walks it saves, so the moment path keeps the plain
+tile's accumulator budget and the multi tile. (The two paths are not bitwise equal to each
+other -- different template instantiations contract FMAs differently under `--use_fast_math` --
+both pass the moment gates; that parity was never a gate.)
+
+Verdict: B5 closed. Quad at nz = 4 costs 1.3–1.6× mono on `gg`, 1.5× on `kg`, 1.7–1.8× on
+`three_by_two_pt`, all of it the arithmetic of the moment terms, no spill left on the ξ± tile.

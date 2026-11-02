@@ -101,11 +101,8 @@ class TestCodec(unittest.TestCase):
 
     def test_block_local_indices_equal_np_unique(self):
         """The sort-free row blocks are bitwise np.unique(return_inverse=True),
-        for the Numba kernel and its numpy twin alike -- with one id range and
-        with the id-range bounds of a mixed pixel / cell block (the edge
-        split), where the ranges lie far apart."""
+        for the Numba kernel and its numpy twin alike."""
         rng = np.random.default_rng(4)
-        no_bounds = np.zeros(0, dtype=np.int64)
         cases = [(0, 5, 0), (1, 5, 3), (300, 40, 7), (2000, 70000, 10**6)]
         cases += [(40, 10**7, 2**30)]
         for dtype in (np.int32, np.int64):
@@ -117,7 +114,7 @@ class TestCodec(unittest.TestCase):
                 for impl in (packing._block_local_kernel, packing._block_local_numpy):
                     with self.subTest(impl=impl.__name__, dtype=dtype, n=n):
                         local = np.full((n + 6, 4), 7, dtype=np.uint16)
-                        uniq = impl(ids, lo, hi, local, no_bounds)
+                        uniq = impl(ids, lo, hi, local)
                         self.assertEqual(uniq.dtype, ids.dtype)
                         np.testing.assert_array_equal(uniq, ref)
                         if ref.size <= 65536:
@@ -126,33 +123,6 @@ class TestCodec(unittest.TestCase):
                         self.assertTrue(np.all(local[:lo] == 7))
                         self.assertTrue(np.all(local[hi:] == 7))
                         self.assertTrue(np.all(local[:, 2:] == 7))
-        # mixed ranges: pixels near 10^5, cells of two levels near 5 * 10^8
-        # and 5 * 10^8 + 10^6; bounds between them (and an unused range)
-        n = 5000
-        parts = [
-            rng.integers(10**5, 10**5 + 3000, (2, n)),
-            rng.integers(5 * 10**8, 5 * 10**8 + 400, (2, n)),
-            rng.integers(5 * 10**8 + 10**6, 5 * 10**8 + 10**6 + 50, (2, n)),
-        ]
-        ids = np.concatenate(parts, axis=1)
-        perm = rng.permutation(ids.shape[1])
-        ids = ids[:, perm].astype(np.int64)
-        bounds = np.array([10**6, 5 * 10**8 + 10**6, 10**12], dtype=np.int64)
-        ref, inv = np.unique(ids, return_inverse=True)
-        inv = np.reshape(inv, (2, -1)).T
-        for impl in (packing._block_local_kernel, packing._block_local_numpy):
-            with self.subTest(impl=impl.__name__, mixed=True):
-                local = np.zeros((ids.shape[1], 4), dtype=np.uint16)
-                uniq = impl(ids, 0, ids.shape[1], local, bounds)
-                np.testing.assert_array_equal(uniq, ref)
-                np.testing.assert_array_equal(local[:, :2], inv)
-        # the public entry point: bounds optional, and the two agree bitwise
-        local_a = np.zeros((ids.shape[1], 4), dtype=np.uint16)
-        local_b = np.zeros((ids.shape[1], 4), dtype=np.uint16)
-        u_a = packing.block_local_indices(ids, 0, ids.shape[1], local_a)
-        u_b = packing.block_local_indices(ids, 0, ids.shape[1], local_b, bounds)
-        np.testing.assert_array_equal(u_a, u_b)
-        np.testing.assert_array_equal(local_a, local_b)
 
     def test_pack_patch_writes_into_out(self):
         rng = np.random.default_rng(5)

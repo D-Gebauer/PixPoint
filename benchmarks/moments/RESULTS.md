@@ -133,10 +133,12 @@ more accurate.
   quad is the thing to watch (the prototype's nz = 4 quad kernel is 2.9× mono, likely spilling).
 - `three_by_two_pt`'s fused tile gets the same term for ξ−; γ_t has the analogous spin-2 version
   (coefficients 2 instead of 4) if wanted; ξ+, ξ_g need nothing.
-- Binning (±2 % at k = 4 after quad) becomes the leading treecode error → pair with an
-  edge-splitting pair search (`bin_slop = 0` behaviour) if a smooth data vector matters.
+- Binning (±2 % at k = 4 after quad) becomes the leading treecode error. An edge-splitting
+  pair search (`bin_slop = 0` behaviour) removes it but was measured at 5× (patches) to 25×
+  (footprint) the per-map cost at k = 4 and taken out of the library again (8.0.0 guide,
+  stage C); a smooth data vector means full resolution.
 
-## Follow-up: Global2PCF benchmark at nside 1024 with edge splitting (2026-11-02)
+## Follow-up: Global2PCF prototype benchmark at nside 1024 with edge splitting (2026-11-02; prototype only, the library's split was removed)
 
 The same variants on CosmoFuse's footprint-wide `Global2PCF` pair lists (DES Y3 multiprobe mocks,
 20 maps, 8 bins 15′–250′, source bin 4 with weights, TreeCorr brute as the baseline), plus a
@@ -249,6 +251,7 @@ quad; tags `kK_quad`, old plain tags `kK`); el9 paths.  Same setup as `T10_RESUL
 The moments do what they can: at k = 1.5 the ζ_a,− shift halves (0.81 → 0.39 σ_patch, 3.7 →
 1.6 σ in quadrature) and at k = 2.9 it drops below the ζ_a,+ one.  What remains is the
 **binning window** — ζ_a,+ is untouched by construction and ζ_a,− now matches it — which is
-stage C's edge split, not the moments.  k = 2 with quad (0.39 σ) does not pass the 0.27 σ
-criterion that k = 2.9 passes, so the production k stays 2.9 until the split lands; the ζ
-price of k = 2.9 itself falls from 0.27 to 0.20 σ_patch with the default `"quad"`.
+a binning effect, not the moments' (an edge-splitting search would remove it; it was built,
+measured at 5–25× the per-map cost and removed again).  k = 2 with quad (0.39 σ) does not pass
+the 0.27 σ criterion that k = 2.9 passes, so the production k stays 2.9; the ζ price of
+k = 2.9 itself falls from 0.27 to 0.20 σ_patch with the default `"quad"`.

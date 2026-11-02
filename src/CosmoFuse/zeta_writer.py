@@ -83,7 +83,6 @@ _PROVENANCE_ATTRS = (
     "n_patches",
     "resolution_factor",
     "cell_moments",
-    "edge_slop",
     "aperture_nside",
     "pack_pairs",
     "pack_host_pairs",

@@ -1367,15 +1367,10 @@ def _moment_geometry_packed(pairs, d_codes, base, mb, d_lo, d_scale, start, stop
 
 
 def _cell_moments(mom, cells, nz):
-    """(npairs, nz, NM) complex moments of the cells of one pair end; zero
-    for a pixel end (cell index < 0), as in the CUDA tiles."""
+    """(npairs, nz, NM) complex moments of the cells of one pair end."""
     m = np.asarray(mom)  # (n_appended, nz, NM, 2)
-    cells = np.asarray(cells, dtype=np.int64)
-    has = cells >= 0
-    sel = m[np.where(has, cells, 0)]  # (npairs, nz, NM, 2)
-    out = sel[..., 0].astype(np.float64) + 1j * sel[..., 1].astype(np.float64)
-    out[~has] = 0.0
-    return out
+    sel = m[cells]  # (npairs, nz, NM, 2)
+    return sel[..., 0].astype(np.float64) + 1j * sel[..., 1].astype(np.float64)
 
 
 def _tile_xipm_mom(

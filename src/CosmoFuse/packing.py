@@ -24,10 +24,6 @@ marked in a table spanning their range, the marks are numbered in order
 (= ``np.unique``'s sorted output), and each pair looks its local index up.
 The result is bitwise that of ``np.unique(..., return_inverse=True)`` at
 O(pairs + span) instead of O(pairs log pairs); :func:`block_local_indices`.
-A block of the edge-splitting search mixes pixel ids with cell ids of
-several levels, which lie ``npix`` apart: ``bounds`` names the id ranges
-(pixels, every treecode level), and the table then spans each range on its
-own instead of the gap between them.
 Every function here works on one patch and releases the GIL (Numba ``nogil``
 or large numpy loops), so patches can be packed in parallel threads.
 """
@@ -102,130 +98,73 @@ def decode_angles(codes: np.ndarray, complex_dtype: np.dtype) -> np.ndarray:
     return out.astype(complex_dtype, copy=False)
 
 
-@njit(nogil=True, cache=True, inline="always")
-def _range_of(v: Any, bounds: np.ndarray) -> int:
-    """Index of the id range ``v`` falls in: the number of ``bounds <= v``."""
-    r = 0
-    for k in range(bounds.size):
-        if v >= bounds[k]:
-            r = k + 1
-    return r
-
-
 @njit(nogil=True, cache=True)
-def _block_local_kernel(
-    ids: np.ndarray, lo: int, hi: int, local: np.ndarray, bounds: np.ndarray
-) -> Any:
+def _block_local_kernel(ids: np.ndarray, lo: int, hi: int, local: np.ndarray) -> Any:
     """Sorted unique ids of the pairs ``lo:hi`` of ``ids`` (2, npairs) and
     their local indices, written to ``local[lo:hi, :2]`` -- unless there are
-    more than 65536 of them (the caller raises; ``local`` is then unchanged).
-
-    ``bounds`` (sorted int64, may be empty) splits the id axis into ranges
-    that are marked in separate tables, so ids far apart (pixels and cells)
-    do not cost the gap between them."""
+    more than 65536 of them (the caller raises; ``local`` is then unchanged)."""
     if hi <= lo:
         return np.zeros(0, dtype=ids.dtype)
-    nr = bounds.size + 1
-    mn = np.empty(nr, dtype=np.int64)
-    mx = np.empty(nr, dtype=np.int64)
-    for r in range(nr):
-        mn[r] = np.int64(9223372036854775807)
-        mx[r] = np.int64(-9223372036854775807)
+    mn = ids[0, lo]
+    mx = mn
     for p in range(lo, hi):
         for s in range(2):
-            v = np.int64(ids[s, p])
-            r = _range_of(v, bounds)
-            if v < mn[r]:
-                mn[r] = v
-            if v > mx[r]:
-                mx[r] = v
-    base = np.zeros(nr + 1, dtype=np.int64)
-    for r in range(nr):
-        span_r = mx[r] - mn[r] + 1 if mx[r] >= mn[r] else 0
-        base[r + 1] = base[r] + span_r
-    span = base[nr]
+            v = ids[s, p]
+            if v < mn:
+                mn = v
+            if v > mx:
+                mx = v
+    span = np.int64(mx) - np.int64(mn) + 1
     mark = np.zeros(span, dtype=np.int32)  # local index + 1
     for p in range(lo, hi):
-        for s in range(2):
-            v = np.int64(ids[s, p])
-            r = _range_of(v, bounds)
-            mark[base[r] + v - mn[r]] = 1
+        mark[np.int64(ids[0, p]) - mn] = 1
+        mark[np.int64(ids[1, p]) - mn] = 1
     cap = 2 * (hi - lo)  # at most two new ids per pair
     uniq = np.empty(cap if cap < span else span, dtype=ids.dtype)
     k = 0
-    for r in range(nr):
-        for j in range(base[r], base[r + 1]):
-            if mark[j] != 0:
-                uniq[k] = mn[r] + (j - base[r])
-                k += 1
-                mark[j] = k
+    for j in range(span):
+        if mark[j] != 0:
+            uniq[k] = mn + j
+            k += 1
+            mark[j] = k
     if k <= 65536:
         for p in range(lo, hi):
-            for s in range(2):
-                v = np.int64(ids[s, p])
-                r = _range_of(v, bounds)
-                local[p, s] = mark[base[r] + v - mn[r]] - 1
+            local[p, 0] = mark[np.int64(ids[0, p]) - mn] - 1
+            local[p, 1] = mark[np.int64(ids[1, p]) - mn] - 1
     return uniq[:k]
 
 
-def _block_local_numpy(
-    ids: np.ndarray, lo: int, hi: int, local: np.ndarray, bounds: np.ndarray
-) -> Any:
+def _block_local_numpy(ids: np.ndarray, lo: int, hi: int, local: np.ndarray) -> Any:
     """Vectorised twin of :func:`_block_local_kernel` (no sort either); used
     when the JIT is disabled (the test suite) and as its reference."""
     block = ids[:, lo:hi]
     if block.size == 0:
         return np.zeros(0, dtype=ids.dtype)
-    block64 = block.astype(np.int64)
-    which = np.searchsorted(np.asarray(bounds, dtype=np.int64), block64, side="right")
-    inv = np.empty(block64.shape, dtype=np.int64)
-    parts = []
-    offset = 0
-    for r in range(int(bounds.size) + 1):
-        sel = which == r
-        if not np.any(sel):
-            continue
-        vals = block64[sel]
-        mn = vals.min()
-        shifted = vals - mn
-        mark = np.zeros(int(shifted.max()) + 1, dtype=np.int64)
-        mark[shifted] = 1
-        u = np.flatnonzero(mark) + mn
-        np.cumsum(mark, out=mark)
-        inv[sel] = mark[shifted] - 1 + offset
-        offset += int(u.size)
-        parts.append(u)
-    uniq = np.concatenate(parts).astype(ids.dtype)
+    mn = block.min()
+    shifted = block.astype(np.int64) - np.int64(mn)
+    mark = np.zeros(int(shifted.max()) + 1, dtype=np.int64)
+    mark[shifted] = 1
+    uniq = (np.flatnonzero(mark) + np.int64(mn)).astype(ids.dtype)
     if uniq.size <= 65536:
-        local[lo:hi, :2] = inv.T
+        np.cumsum(mark, out=mark)
+        local[lo:hi, :2] = (mark[shifted] - 1).T
     return uniq
 
 
 def block_local_indices(
-    ids: np.ndarray,
-    lo: int,
-    hi: int,
-    local: np.ndarray,
-    bounds: Optional[np.ndarray] = None,
+    ids: np.ndarray, lo: int, hi: int, local: np.ndarray
 ) -> np.ndarray:
     """``np.unique(ids[:, lo:hi], return_inverse=True)`` without a sort.
 
     Returns the sorted unique ids and writes the inverse (local indices) to
     ``local[lo:hi, :2]``; when there are more than ``MAX_LOCAL_ROWS`` of
-    them the caller raises and ``local`` must not be used.  ``bounds``:
-    sorted boundaries of id ranges that are marked separately (the pixel /
-    cell-level ranges of a mixed-level block); ``None`` = one range.
+    them the caller raises and ``local`` must not be used.
     """
-    b = (
-        np.zeros(0, dtype=np.int64)
-        if bounds is None
-        else np.ascontiguousarray(np.asarray(bounds, dtype=np.int64))
-    )
     uniq: np.ndarray
     if getattr(numba.config, "DISABLE_JIT", False):
-        uniq = _block_local_numpy(ids, lo, hi, local, b)
+        uniq = _block_local_numpy(ids, lo, hi, local)
     else:
-        uniq = _block_local_kernel(ids, int(lo), int(hi), local, b)
+        uniq = _block_local_kernel(ids, int(lo), int(hi), local)
     return uniq
 
 
@@ -235,7 +174,6 @@ def pack_patch(
     bin_counts: np.ndarray,
     groups: Sequence[Tuple[int, int, int]],
     out: Optional[np.ndarray] = None,
-    bounds: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, List[np.ndarray], np.ndarray]:
     """Pack the pairs of one patch.
 
@@ -250,8 +188,6 @@ def pack_patch(
         groups: resolution levels as ``(nside, first_bin, stop_bin)``.
         out: optional (npairs, 4) uint16 array to write the payload to (a
             slice of the whole catalogue's payload, so nothing is copied).
-        bounds: id-range boundaries for :func:`block_local_indices` (a
-            block of the edge-splitting search mixes pixels and cells).
 
     Returns:
         packed: (npairs, 4) uint16 ``[local_a, local_b, angle_a, angle_b]``.
@@ -275,14 +211,12 @@ def pack_patch(
     block_of_bin = np.zeros(len(bin_counts), dtype=np.int64)
     for g, (_nside, b0, b1) in enumerate(groups):
         lo, hi = int(edges[b0]), int(edges[b1])
-        uniq = block_local_indices(rows, lo, hi, packed, bounds)
+        uniq = block_local_indices(rows, lo, hi, packed)
         if uniq.size > MAX_LOCAL_ROWS:
             raise ValueError(
                 f"pair packing needs <= {MAX_LOCAL_ROWS} rows per (patch, "
-                f"resolution level); found {uniq.size}. Use pack_pairs=False, "
-                "smaller patches (a larger tile_nside for Global2PCF), or -- with "
-                "edge_slop, whose pixel pairs reach every bin -- a smaller "
-                "theta_max."
+                f"resolution level); found {uniq.size}. Use pack_pairs=False "
+                "or smaller patches."
             )
         blocks.append(uniq)
         block_of_bin[b0:b1] = g
@@ -296,7 +230,6 @@ def pack_host_patch(
     groups: Sequence[Tuple[int, int, int]],
     index_dtype: np.dtype,
     moments: Optional[Tuple[np.ndarray, np.ndarray, int, np.ndarray]] = None,
-    bounds: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """The ``pack_host_pairs`` payload of one patch, on its *global* ids:
     ``(packed (npairs, 4) uint16, block ids (concatenated), block sizes,
@@ -307,7 +240,7 @@ def pack_host_patch(
     codes (:func:`encode_angles_from_phi`) and returns the separation codes
     of those pairs (:func:`encode_separations`, per bin); ``None`` otherwise.
     """
-    packed, blocks, _ = pack_patch(ids, exp2phi, bin_counts, groups, bounds=bounds)
+    packed, blocks, _ = pack_patch(ids, exp2phi, bin_counts, groups)
     block_ids = (
         np.concatenate(blocks).astype(index_dtype, copy=False)
         if blocks

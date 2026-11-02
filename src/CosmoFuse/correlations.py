@@ -38,10 +38,8 @@ from .treecode import (
     TreecodeGeometry,
     assign_levels,
     effective_resolution_factor,
-    id_range_bounds,
     is_power_of_two,
     level_groups,
-    validate_edge_slop,
     validate_resolution_factor,
 )
 from .utils import live_object_serial, pixel2RaDec, select_patch_centers
@@ -387,7 +385,6 @@ class Integrated3PCF:
         pack_pairs: bool = False,
         pack_host_pairs: bool = False,
         cell_moments: Optional[str] = "quad",
-        edge_slop: Optional[float] = None,
     ) -> None:
         """Initialize the Integrated3PCF class with validation.
 
@@ -479,23 +476,6 @@ class Integrated3PCF:
                 (nothing is allocated or launched); with a treecode the
                 cell rows hold the *transported* mean, which also moves ξ+
                 at the 1e-5 level.  Goes into the provenance either way.
-            edge_slop: ``None`` (default): with a treecode, every angular
-                bin holds the cell pairs of *its* level, binned by the
-                separation of the centroids (the static search of 7.x).  A
-                number ``>= 0`` switches on the **edge-splitting search**
-                (:mod:`CosmoFuse.edge_split`, TreeCorr's ``bin_slop``): from
-                the coarsest level down, a cell pair is accepted into the bin
-                of its centroid separation when both cells are no coarser
-                than that bin's level and the range of its child pairs
-                overhangs the bin's edges by at most ``edge_slop`` bin
-                widths; otherwise the larger cell is split, down to pixel
-                pairs, which are binned exactly.  ``0.0`` removes the
-                binning window of the static list (Σ w_i w_j per bin equals
-                full resolution; the ξ−/γ_t phase window is what
-                ``cell_moments`` handles), at 5-15× the pairs of the static
-                list at the same k -- a k = 4 (or coarser) feature; it is
-                validated at 0 only.  Inert at full resolution.  Part of
-                :attr:`level_table`; a pair file records it.
 
         Raises:
             ValueError: If input parameters are invalid
@@ -564,12 +544,6 @@ class Integrated3PCF:
         self.pack_pairs = bool(pack_pairs)
         self.pack_host_pairs = bool(pack_host_pairs)
         self.cell_moments = validate_cell_moments(cell_moments)
-        self.edge_slop = validate_edge_slop(edge_slop)
-        if self.edge_slop is not None and pair_search_precision != "float64":
-            raise ValueError(
-                "edge_slop needs pair_search_precision='float64': the split "
-                "search runs at double precision (float32 mis-bins pairs)."
-            )
         self._pair_finder = self._make_pair_finder()
         if self._pair_finder.search_dtype == np.dtype(np.float32):
             jitter = 6e-8 / self.theta_min**2
@@ -705,8 +679,7 @@ class Integrated3PCF:
             **kwargs: Forwarded to the constructor (``nbins``,
                 ``theta_min``, ``theta_max``, ``device``, ``fastmath``,
                 ``map_precision``, ``rotation_precision``,
-                ``resolution_factor``, ``cell_moments``, ``edge_slop``,
-                ``aperture_nside``, ...).
+                ``resolution_factor``, ``aperture_nside``, ...).
 
         Raises:
             ValueError: If no candidate centre satisfies the masking
@@ -1746,7 +1719,6 @@ class Integrated3PCF:
         # the GIL, so they are processed in parallel threads, each writing
         # its own slice of the preallocated arrays.
         lut = self._global_to_row_lut()
-        bounds = self._id_range_bounds()
 
         def process(i: int) -> Optional[List[np.ndarray]]:
             lo, hi = int(first_patch_ind[i]), int(first_patch_ind[i + 1])
@@ -1781,7 +1753,6 @@ class Integrated3PCF:
                     bins[i],
                     groups,
                     out=packed[lo:hi],
-                    bounds=bounds,
                 )
                 blocks = [self._pair_ids_to_rows(b, lut) for b in id_blocks]
                 if keep_unpacked:
@@ -3165,15 +3136,12 @@ class Integrated3PCF:
 
         Store this next to every measured data vector: a treecode
         measurement is only comparable to measurements made with the same
-        table.  ``nside[b]`` is the level bin ``b`` is measured on; with
-        ``edge_slop`` set it is the *coarsest* level the bin uses (every
-        finer level down to the pixels appears next to the bin edges).
+        table.
         """
         edges_arcmin = np.degrees(np.asarray(self.binedges, dtype=np.float64)) * 60.0
         return {
             "resolution_factor": self.resolution_factor,
             "cell_moments": self.cell_moments,
-            "edge_slop": self.edge_slop,
             "base_nside": int(self.nside),
             "aperture_nside": int(self.aperture_nside or self.nside),
             "theta_lo_arcmin": edges_arcmin[:-1].copy(),
@@ -3183,11 +3151,6 @@ class Integrated3PCF:
                 self.binedges, self.level_nside
             ),
         }
-
-    def _id_range_bounds(self) -> Optional[np.ndarray]:
-        """Global-id range boundaries (pixels, every treecode level) for the
-        range-aware row blocks of the packing (``treecode.id_range_bounds``)."""
-        return id_range_bounds(self.npix, self.n_aperture_cells, self._treecode)
 
     def _global_to_row_lut(self) -> Optional[np.ndarray]:
         """HEALPix id -> row id lookup table (``None`` if rows == pixels)."""

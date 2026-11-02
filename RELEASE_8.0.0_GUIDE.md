@@ -26,7 +26,7 @@ Prototype and measurements the new features build on:
 |---|---|---|
 | A | remove `ThreePointResult.to_centroid()`; remove per-tile 2PCF sums and `TwoPointResult.jackknife()` | breaking |
 | B | moment-carrying treecode cells (`cell_moments = None | "dipole" | "quad"`) | estimator option |
-| C | edge-splitting pair search (`edge_slop`, exact binning at 0) | estimator option |
+| C | ~~edge-splitting pair search (`edge_slop`)~~ — implemented, measured, removed | — |
 | D | 1-point statistics: `OnePoint` (aperture-mass PDF from shear, smoothed-field PDF of κ/δ, moments) | new estimator |
 | E | rename to **PixPoint** (`import pixpoint`), HDF5 `kind` strings, URLs | breaking |
 | F | version, CHANGELOG with before/after table, GPU test pass, `CLAUDE.md` rewrite | release |
@@ -46,7 +46,6 @@ independent of both. Each stage is its own commit series with the test suite gre
 | `pack_host_pairs` | `False` | `False` (opt-in, unchanged) |
 | `resolution_factor` | `None` | `None` (full resolution) |
 | `aperture_nside` | `None` | `None` (full resolution) |
-| `edge_slop` | — | `None` (static per-bin levels when `resolution_factor` is set) |
 | `cell_moments` | — | `"quad"` — inert at full resolution; acts whenever `resolution_factor` or `aperture_nside` is set |
 
 Consequences of `pack_pairs=True` by default, to be stated in the CHANGELOG: the private
@@ -62,7 +61,7 @@ exact pixel-pair estimator.
 - `resolution_factor=None, pack_pairs=False` stays **bit-for-bit identical to 4.20.0** (except
   `M_a` 7.6.0, `M_g` 7.6.2); `resolution_factor=None, pack_pairs=True` stays bit-for-bit
   identical to 7.7.0 with `pack_pairs=True`. Nothing in B–D may touch the full-resolution
-  pair path or its packed payload encoding. `cell_moments=None, edge_slop=None` must
+  pair path or its packed payload encoding. `cell_moments=None` must
   reproduce 7.7.0 bitwise for every k (same `pack_pairs`).
 - Every new `__global__` needs a numpy twin in `tests/cuda_emulation.py`
   (`_KERNEL_EMULATORS`), the typed-launch signature parse must accept it, and
@@ -389,96 +388,18 @@ information fix, offered because it is 1.6× instead of 2.2–2.9× the kernel c
   128 (expect 2× / 3× the mono pass at the same level) and the ζ-level price via
   `t10_zeta_level.py --aperture-nside` for mono, dipole and quad.
 
-## Stage C — edge-splitting pair search — implemented and measured 2026-11-02
+## Stage C — edge-splitting pair search — implemented, measured and **removed** (2026-11-02)
 
-Decisions taken (see the CHANGELOG entry): C2.1 (a) Numba on the host, parallel, no
-fastmath, float64 always (float32 search precision refused with `edge_slop`); C2.2 the
-packed row blocks stay per (patch, level group) but mark the pixel / cell id ranges
-separately (`block_local_indices(..., bounds)`) and `level_table` keeps the coarsest level
-per bin plus `edge_slop`; C2.3 a tile owns a *top-level* cell pair by the lower id and the
-whole split tree below it (≡ one patch by construction); C2.4 the preflight model walks the
-stage ladder cell-cell → cell-child → … → pixel pairs (`treecode.split_stages`, 1–7 % per
-bin); C2.5 float slop, validated at 0, acceptance rule gated at 0.3; C2.6 pixel ends have no
-moments (`EndMoments::load(…, has)`, `_mom_at`). Open question 3: yes at nside ≥ 1024 for
-`Global2PCF` (the pixel block of every coarse bin spans the tile's halo) -- documented, the
-error message names `tile_nside` / `pack_pairs=False`; chunked row blocks are a follow-up.
-Both estimators take `edge_slop` (open question 5). Gates: `tests/test_edge_split.py`.
-
-### C1. What ships
-
-`edge_slop` (default `None` = the static per-bin level list of 7.7.0; `0.0` = exact binning).
-Top-down from the coarsest level: candidates are unordered cell pairs (self pairs included)
-whose separation range `[d − s_I − s_J, d + s_I + s_J]` reaches the θ range. A pair is
-accepted whole if its home bin (by centroid separation) is owned by this tile/patch, both
-cells are no coarser than that bin's static level, and the overhang beyond the bin edges is
-≤ `edge_slop` × bin width; otherwise the larger cell is split (both on a tie; a self pair
-keeps c_I ≤ c_J). Pixel pairs are binned exactly. Measured (nside 1024, DES Y3): at slop 0,
-Σ w_i w_j per bin equals brute force to 2e-10 (static k = 4: up to 2.7 % off); quad + split at
-k = 4 is 0.001–0.004 σ from brute per noisy map, 1.82e9 pairs (11× static k = 4, 17 % of full
-resolution), 51.5 GB, 115 ms/map vs 3.3 s chunked full resolution; k = 8 + split has *more*
-pairs with no gain — the split is a k = 4 (or coarser) feature.
-
-### C2. Design decisions
-
-1. **Where it runs.** The prototype's search is a CuPy kernel (12–20 s at nside 1024 after
-   CosmoFuse's 53–96 s CPU search for the cells). Options: (a) Numba on the host like the rest
-   of `pair_finder.py` / `global_geometry.py` (one code path, CPU backend works, no twin
-   needed, slower — measure); (b) CuPy kernel with a numpy twin and a Numba fallback.
-   Recommendation: (a) first, parallel over tiles/patches with `prange`; take (b) only if the
-   host search exceeds the static search time by more than ~2×.
-2. **Mixed-level pairs.** A split list contains pairs of cells from *different* levels in one
-   bin. The row space already addresses every level (global ids ≥ npix are cells), so the
-   kernels need nothing — but `packing.block_local_indices` builds row blocks per (patch,
-   level, bin) from a marker table that assumes one level per bin, and the `level_table`
-   provenance assumes it too. Row blocks become per (patch, bin) over all levels the bin uses
-   (uint16 local ids still hold ≤ 65536 distinct rows per block; split if not, as now), and
-   `level_table` gains `edge_slop` + per-bin "levels used". `TreecodeGeometry` is unchanged
-   (cells exist at every level anyway; the static search just does not pair them).
-3. **Owning and tiles.** The global search owns a pair by the tile of its lower global id;
-   with the split, owner = tile of the *home* pixel pair's lower id at the coarsest accepted
-   level — define it once so that `Global2PCF` ≡ one-patch `Integrated3PCF` holds and the
-   multi-device balance by pair count still works (`balanced_ranges` over the split counts).
-4. **Memory.** Split lists at nside 1024 need ~52 GB on the device (10 B/pair packed would
-   be 18 GB — packing is the lever here, make the split path packable from day one). The
-   preflight model (`treecode.estimate_pairs_per_bin`, `memory_budget_gb`) must predict
-   split counts (prototype `split_stats` has `accepted_by_level` to calibrate against) and
-   refuse configurations that do not fit; `Global2PCF.device=[...]` splits by tile range as now.
-5. **Slop > 0** is asymmetric at level seams like the static list (measured only at 0; the
-   prototype allows it). Ship it but document that only 0 was validated, or ship 0 only
-   (`edge_slop: bool`) and keep the float for later. Recommendation: float, validated at 0,
-   documented.
-6. **Interaction with B.** Split pairs at fine levels have `D = Q = 0`; the moment correction
-   applies to coarse-coarse and coarse-pixel pairs alike (1/d is per pair). The kernel does
-   not care which search produced the list.
-
-### C3. Files
-
-`pair_finder.py` (patch search), `global_geometry.py` (`unique_pairs` split variant,
-`TileSet.reach` margin for cell radii), `treecode.py` (cell radii `s_node`, candidate model),
-`packing.py` (blocks per (patch, bin)), `correlations.py` / `global_2pcf.py` (`edge_slop`
-argument, `level_table`, preflight), `io_handler.py` (format 5 attrs), `zeta_writer.py`
-provenance, `docs/estimator_note.md` (binning definition: exact at slop 0).
-
-### C4. Gates (`tests/test_edge_split.py`)
-
-1. slop 0: Σ w_i w_j per bin ≡ brute force ≤ 1e-10 relative, every k, with and without a mask.
-   ξ±, w, γ_t are *not* gated against full resolution (the phase window remains): gate them
-   against the exact child sums with the exact bin assignment (B4.3 machinery) instead, and
-   w(θ) — which has no phase — against full resolution ≤ 1e-12.
-2. Every accepted pair satisfies the acceptance rule (range check on the stored list).
-3. `Global2PCF(edge_slop=0)` ≡ one-patch `Integrated3PCF(edge_slop=0)` ≤ 1e-12; multi-device
-   bitwise; packed ≡ unpacked; file round trip; CPU ≡ GPU.
-4. Preflight pair-count model within 20 % of the actual split count on the test footprint.
-
-### C5. Measurements — done 2026-11-02 (`benchmarks/edge_split/RESULTS.md`)
-
-A100, DES Y3, k = 4 quad, nz = 4, float32 maps. Pairs: 1.5× (patches, 512) / 2.6× (patches,
-1024) / 4.4× (footprint, 512) / 10.8× (footprint, 1024) the static list; the footprint at 1024 has
-1.8e9 pairs = 78 GB unpacked, 18 GB packed. Per map: `three_by_two_pt` 9.8 → 56 ms on 69 patches
-at nside 1024 (notebook prototype: 115 ms), 115 → 2740 ms on the footprint; the split is also
-~2× slower *per pair* (mixed levels, pixel strips, moment tiles on every bin). Host search: 6 s
-(patches) / 277 s (footprint, 1024). Packing: memory ÷4, speed neutral. Verdict: a validation
-tool at k = 4, not the production estimator; the sawtooth plot waits for the k = 2 T10 rerun.
+`edge_slop` shipped in `a2fe1a1` (search, kernels' pixel-end guard, packing bounds, gates) and
+was measured on the A100 (`65f0ece`): at k = 4 the exact binning had 1.5–2.6× (patches) to
+4.4–10.8× (footprint) the static pairs and ran ~2× slower per pair — `three_by_two_pt` 9.8 → 56 ms
+per map on 69 patches at nside 1024, 0.12 → 2.7 s on the footprint (1.8e9 pairs, 78 GB unpacked,
+host search 277 s) — only ~1.5× cheaper than full resolution while still carrying the moments'
+phase window. The user decided it does not earn its place next to the static list (fast, with
+the moments) and full resolution (exact): reverted in the commit after `3dee385`; the code and
+its measurements are recoverable from those two commits. The binning window of the static list
+(±2 % at k = 4, alternating at the level seams) stays a known, deterministic property of the
+treecode estimator, identical for data and simulations (see the science caveats).
 
 ## Stage D — 1-point statistics: `OnePoint` — implemented 2026-11-02 (D4 measurements pending)
 
@@ -642,12 +563,12 @@ Do this in one commit after D is merged and green.
 
 - Moments remove the ξ− *phase* window of coarse cells (mean bias and the sin 4δφ leakage);
   the *binning* window (pairs exchanged across bin edges, ±2 % at k = 4, sawtooth at level
-  seams) remains and only `edge_slop=0` removes it. Both are deterministic and shared by data
-  and sims; the split matters for theory comparison, smooth data vectors, and comparability
-  with exact codes — not for information.
+  seams) remains; an edge-splitting search removes it but costs 5–25× per map at k = 4 and was
+  removed from the library (stage C). Both windows are deterministic and shared by data and
+  sims; a smooth data vector or comparability with exact codes means full resolution.
 - `cell_moments` acts on ξ− (4δφ) and γ_t (2δφ, with scalar lens-cell moments), changes ξ+
-  at the 1e-5 level (transported frame) and leaves ξ_g untouched. Store `cell_moments`,
-  `edge_slop` and `level_table` with every data vector (provenance).
+  at the 1e-5 level (transported frame) and leaves ξ_g untouched. Store `cell_moments` and
+  `level_table` with every data vector (provenance).
 - Dipole alone flips the sign of the ξ− mean bias (+8δφ²); only quad restores the modulus.
 - Aperture moments: the dipole removes the shape-noise scatter of the `aperture_nside` window
   (information), the quad also its mean rescaling of M_a / M_g (second order). Choose
@@ -664,13 +585,10 @@ Do this in one commit after D is merged and green.
 
 1. Aperture dipole (B2.8): the probe's measured scatter/bias table decides the recommended
    `aperture_nside` for production, not whether the dipole ships.
-2. Split search on the host (Numba) or device (B/C2.1) — measure at nside 1024.
-3. Row blocks per (patch, bin) with mixed levels: does any production footprint exceed 65536
-   distinct rows per block at nside 2048 with the split? If so, blocks need splitting as the
-   full-resolution path does (`block_local_indices`).
-4. 1-pt histogram weighting and the `OnePointResult` arrays that a writer streams (D2.4/5).
-5. Whether `Integrated3PCF` (patches) gets `edge_slop` too, or only `Global2PCF` first. The
-   cell structure is shared, the per-patch pair search is the simpler one — recommendation:
-   both, with the same tests.
+2. ~~Split search on the host or device~~ — moot, the split was removed.
+3. ~~Row blocks with mixed levels at nside 2048~~ — moot, the split was removed.
+4. 1-pt histogram weighting: decided, unit weight per accepted aperture (D2.4); the writer is
+   `OnePointWriter` on the shared `ResultWriter` base (D2.5).
+5. ~~`edge_slop` on patches and footprint~~ — both had it; removed.
 6. T10 re-run with quad: if k = 2 quad passes, change the production recommendation (and the
    default factor behind `resolution_factor=True` / `"default"`).

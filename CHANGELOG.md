@@ -78,51 +78,6 @@ analysis's job.
   `M_g` has a constant filter and needs nothing. On the test field at
   p/θ_Q = 0.18 the per-cell residual goes 4–9 % → 0.5 % → 0.03 % for mono →
   dipole → quad and the patch sums from ±4 % to ±5e-4.
-- **Edge-splitting pair search (`edge_slop`, default `None`).** The static
-  treecode pairs the cells of one level per angular bin and bins every cell
-  pair by its centroid separation, so the child pairs near a bin edge land in
-  the neighbouring bin: a deterministic binning window of ±2 % at k = 4 that
-  alternates in sign at the level seams, and the part of the treecode price
-  the moments cannot touch (ζ_a,+ in `benchmarks/moments/RESULTS.md`).
-  `edge_slop=s` on `Integrated3PCF` and `Global2PCF` replaces that search by
-  a top-down recursion over cell pairs of any two levels
-  (`CosmoFuse/edge_split.py`, TreeCorr's `bin_slop`): a cell pair is accepted
-  into the bin of its centroid separation when both cells are no coarser
-  than that bin's level and the separation range of its child pairs,
-  `d ± (s_I + s_J)` with `s` the cell radius (largest centroid-to-member
-  distance, so the range is exact), overhangs the bin by at most `s` bin
-  widths; otherwise the larger cell is split, down to pixel pairs, which are
-  binned exactly. At `edge_slop=0` the accepted pairs partition the
-  full-resolution pairs bin by bin: Σ w_i w_j and w(θ) equal full resolution
-  (gates ≤ 1e-10 / 1e-12), ξ± and γ_t keep only the phase window the moments
-  handle. Bins then mix pixels and cells of several levels; the kernels
-  needed one change (a pixel end has no moments: `EndMoments::load` /
-  `_mom_at` / the emulators take a `has` flag), the packed row blocks mark
-  pixel and cell id ranges separately (`block_local_indices(..., bounds)`,
-  bitwise the old result with one range), and `prepare()` / `pack_host_pairs`
-  pass those bounds. `Global2PCF` owns a top-level cell pair by the tile of
-  its lower id and walks the whole split tree below it, so the tiles
-  partition the one-patch recursion exactly (gate ≤ 1e-12); several devices
-  balance by the split counts. The preflight pair-count model follows the
-  split (`treecode.split_stages`: cell-cell, cell-child, finer ... pixel
-  pairs in strips next to the bin edges; within 7 % per bin on the test
-  footprint, gate 20 %). The search is Numba on the host (parallel, no
-  fastmath, float64 whatever `pair_search_precision` says; float32 is
-  refused). `edge_slop` is part of `level_table` and the `ZetaWriter`
-  provenance; pair files record it as an attribute (no new format version:
-  the list is self-describing) and a reader asked for a different slop
-  refuses the file like a different `resolution_factor`. Validated at 0 only
-  (slop > 0 ships, the acceptance rule is gated, its science is not). The
-  split is a k ≤ 4 feature: at nside 1024 (DES Y3) it has 2.6× (patches) to
-  10.8× (footprint) the pairs of the static k = 4 list and runs ~2× slower per
-  pair, so a map costs 56 instead of 9.8 ms on 69 patches and 2.7 instead of
-  0.12 s on the footprint (`benchmarks/edge_split/RESULTS.md`). With `pack_pairs=True` the
-  pixel pairs of the split reach every bin, so a packed `(tile, bin)` row
-  block of `Global2PCF` holds the pixel rows of the tile's whole halo: more
-  than 65536 rows at nside ≥ 1024 for the default tiles (pass a larger
-  `tile_nside`) and at nside 2048 for θ_max ≳ 150′ whatever the tiles
-  (`pack_pairs=False` there); patches are never affected. Gates:
-  `tests/test_edge_split.py`.
 - **One-point statistics: `OnePoint`** (`CosmoFuse/onepoint.py`, stage D).
   A fourth estimator, pair-free: the distribution of an aperture field over
   the footprint. `OnePoint(nside, mask, scales, ...)` puts a centre on every

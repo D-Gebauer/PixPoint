@@ -120,26 +120,6 @@ for patches at $\mathrm{dec} = -62°$.
 The aperture statistics of §1 are unaffected by $k$; they have their own
 optional level (`aperture_nside`).
 
-**Binning with the edge split (8.0, `edge_slop`).** The static list bins a
-cell pair by the separation of its centroids, so a child pair $(p, q)$ whose
-own separation lies across a bin edge is counted in the neighbouring bin (a
-window of $\pm 2\,\%$ at $k = 4$, alternating in sign at the level seams).
-With `edge_slop = s` the pairs are found top-down instead: starting from the
-coarsest level, a cell pair $(I, J)$ with centroid separation $d$ and cell
-radii $s_I, s_J$ (the largest angle between a centroid and a member pixel
-centre, so every child pair has separation in $[d - s_I - s_J, d + s_I + s_J]$)
-is accepted into the bin $b \ni d$ when both cells are no coarser than
-$N_{\rm side}^{(b)}$ and that range overhangs $[\theta_b, \theta_{b+1}]$ by at
-most $s\,(\theta_{b+1} - \theta_b)$; otherwise the larger cell is split into
-its children (both on a tie), down to pixel pairs, which are binned exactly.
-At $s = 0$ the accepted pairs partition the pixel pairs of every bin exactly,
-so $\sum w_p w_q$ and $\xi_{\rm g}$ equal the full-resolution values and
-$\xi_\pm$, $\xi_{\rm t}$ differ from them only by the rotation of the child
-pairs with their cell pair's angles -- the phase window that `cell_moments`
-expands away. A bin then holds pairs of several levels; `level_table` still
-quotes the coarsest level of every bin, plus `edge_slop`. Store both with the
-data vector: the split list is a different window from the static one.
-
 ## 4. What the approximation does to the signal
 
 The coarse estimator is a *differently windowed* statistic, not a noisier

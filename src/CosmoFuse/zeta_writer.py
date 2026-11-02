@@ -55,14 +55,18 @@ Both numpy and h5py release the GIL for the bulk of their work, so a plain
 thread genuinely overlaps with the next map-set's kernels.
 """
 
-import json
-import queue
-import threading
-from typing import Any, Dict, Mapping, Optional, Tuple, cast
+from typing import Any, Dict, Mapping, Tuple
 
 import numpy as np
 
 from .correlation_helpers import calculate_all_zetas
+from .result_writer import (  # noqa: F401  (re-exported for callers of 7.x)
+    _CHUNK_BYTES,
+    ResultWriter,
+    _is_device_array,
+    _json_default,
+    _to_host,
+)
 from .results import IntegratedResult
 
 # Central (aperture) and annular (2PCF) fields, in the order of
@@ -70,47 +74,10 @@ from .results import IntegratedResult
 CENTRAL_FIELDS: Tuple[str, ...] = ("M_a", "M_g")
 ANNULAR_FIELDS: Tuple[str, ...] = ("xi_p", "xi_m", "xi_g", "xi_t")
 
-# Target size of one HDF5 chunk along the map axis.
-_CHUNK_BYTES = 1 << 20
-
-_PROVENANCE_ATTRS = (
-    "nside",
-    "nbins",
-    "theta_min",
-    "theta_max",
-    "patch_size",
-    "theta_Q",
-    "n_patches",
-    "resolution_factor",
-    "cell_moments",
-    "aperture_nside",
-    "pack_pairs",
-    "pack_host_pairs",
-    "pair_search_precision",
-)
+_PROVENANCE_ATTRS = ResultWriter._PROVENANCE_ATTRS
 
 
-def _is_device_array(a: Any) -> bool:
-    return type(a).__module__.split(".")[0] == "cupy"
-
-
-def _to_host(a: Any) -> np.ndarray:
-    if _is_device_array(a):
-        import cupy
-
-        return cast(np.ndarray, cupy.asnumpy(a))
-    return np.asarray(a)
-
-
-def _json_default(obj: Any) -> Any:
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, np.generic):
-        return obj.item()
-    return str(obj)
-
-
-class ZetaWriter:
+class ZetaWriter(ResultWriter):
     """Reduce each map-set to zeta (or keep it raw) and append it to HDF5.
 
     Args:
@@ -147,6 +114,11 @@ class ZetaWriter:
         So SWMR buys exactly one thing -- watching a run from another
         process -- and charges a worse crash story for it.  Leave it off
         unless you want the live view.
+
+    The file layout is that of :class:`~CosmoFuse.result_writer.ResultWriter`
+    with the group ``zeta`` or ``raw``; the per-estimator part is the
+    reduction, which runs on the device inside ``submit()`` for device
+    results and in the writer thread for host results.
     """
 
     def __init__(
@@ -162,42 +134,22 @@ class ZetaWriter:
     ) -> None:
         if reduce not in ("zeta", "none"):
             raise ValueError(f"reduce must be 'zeta' or 'none'; got {reduce!r}")
-        if flush_every < 1:
-            raise ValueError("flush_every must be >= 1")
-        if depth < 1:
-            raise ValueError("depth must be >= 1")
-
-        self.path = str(path)
         self.reduce = reduce
-        self.flush_every = int(flush_every)
-        self.swmr = bool(swmr)
-        self._resume = bool(resume)
-        self._provenance = self._collect_provenance(corr)
-
-        self._queue: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue(
-            maxsize=depth
+        super().__init__(
+            path,
+            self.collect_provenance(corr),
+            group="zeta" if reduce == "zeta" else "raw",
+            flush_every=flush_every,
+            depth=depth,
+            swmr=swmr,
+            resume=resume,
         )
-        self._error: Optional[BaseException] = None
-        self._lock = threading.Lock()
-        self._n_submitted = 0
-        self._n_appended = 0
-        self._closed = False
-
-        self._file: Any = None
-        self._group: Any = None
-        self._datasets: Dict[str, Any] = {}
-        self._n_flushed_ds: Any = None
-
-        self._thread = threading.Thread(
-            target=self._drain, name="ZetaWriter", daemon=True
-        )
-        self._thread.start()
 
     # ------------------------------------------------------------------ #
     # submission (calling thread)
     # ------------------------------------------------------------------ #
 
-    def submit(self, result: IntegratedResult) -> None:
+    def submit(self, result: IntegratedResult) -> None:  # type: ignore[override]
         """Queue one map-set.
 
         ``result`` is what ``Integrated3PCF.gg`` / ``kk`` / ``kg`` /
@@ -217,10 +169,7 @@ class ZetaWriter:
             raise ValueError(f"submit() needs a central field ({CENTRAL_FIELDS})")
         if not any(k in given for k in ANNULAR_FIELDS):
             raise ValueError(f"submit() needs an annular field ({ANNULAR_FIELDS})")
-
-        self._queue.put(self._prepare(given))
-        with self._lock:
-            self._n_submitted += 1
+        self._put(self._prepare(given))
 
     def _prepare(self, given: Mapping[str, Any]) -> Dict[str, Any]:
         """Add the map axis and get everything onto the host.
@@ -255,167 +204,12 @@ class ZetaWriter:
     # writer thread
     # ------------------------------------------------------------------ #
 
-    def _drain(self) -> None:
-        try:
-            while True:
-                item = self._queue.get()
-                try:
-                    if item is None:
-                        return
-                    self._consume(item)
-                finally:
-                    self._queue.task_done()
-        except BaseException as exc:  # surfaced on the next submit()/close()
-            with self._lock:
-                self._error = exc
-            self._drain_remaining()
-
-    def _drain_remaining(self) -> None:
-        """Keep the queue moving after a failure so submit() cannot wedge."""
-        while True:
-            item = self._queue.get()
-            self._queue.task_done()
-            if item is None:
-                return
-
-    def _consume(self, item: Dict[str, Any]) -> None:
+    def _payload(self, item: Dict[str, Any]) -> Mapping[str, np.ndarray]:
         if "raw" in item and self.reduce == "zeta":
             zetas = calculate_all_zetas(**item["raw"])
             self._require_zetas(zetas)
-            payload = zetas
-        else:
-            payload = item.get("zeta", item.get("raw", {}))
-
-        if self._file is None:
-            self._open(payload)
-        self._append(payload)
-
-        self._n_appended += 1
-        if self._n_appended % self.flush_every == 0:
-            self._flush()
-
-    def _open(self, payload: Mapping[str, np.ndarray]) -> None:
-        import h5py
-
-        group_name = "zeta" if self.reduce == "zeta" else "raw"
-        libver = "latest" if self.swmr else None
-
-        if self._resume:
-            self._file = h5py.File(self.path, "a", libver=libver)
-            self._group = self._file[group_name]
-            self._n_flushed_ds = self._file["n_flushed"]
-            self._datasets = {k: self._group[k] for k in payload}
-            durable = int(self._n_flushed_ds[()])
-            # discard anything written past the last flush: those rows may
-            # be partial
-            for ds in self._datasets.values():
-                ds.resize(durable, axis=0)
-            self._n_appended = durable
-        else:
-            self._file = h5py.File(self.path, "w", libver=libver)
-            for key, value in self._provenance.items():
-                self._file.attrs[key] = value
-            self._group = self._file.create_group(group_name)
-            self._n_flushed_ds = self._file.create_dataset(
-                "n_flushed", shape=(), dtype=np.int64
-            )
-            for name, arr in payload.items():
-                self._datasets[name] = self._group.create_dataset(
-                    name,
-                    shape=(0,) + arr.shape[1:],
-                    maxshape=(None,) + arr.shape[1:],
-                    chunks=self._chunks(arr),
-                    dtype=arr.dtype,
-                )
-        # SWMR must be enabled only once every object exists.
-        if self.swmr:
-            self._file.swmr_mode = True
-
-    def _chunks(self, arr: np.ndarray) -> Tuple[int, ...]:
-        """Chunk length in map-sets, capped by the flush window.
-
-        A chunk is the unit HDF5 reads, modifies and writes.  Sizing it at
-        ~1 MiB regardless of ``flush_every`` means a 50-map flush touches a
-        chunk that spans many more than 50 maps, so every flush rewrites the
-        whole partially-filled chunk -- write amplification proportional to
-        the ratio, and a file that stays padded to the chunk boundary.
-        Capping it at the flush window makes each flush write whole chunks.
-        """
-        per_map = int(arr.dtype.itemsize * np.prod(arr.shape[1:], dtype=np.int64))
-        n = max(1, _CHUNK_BYTES // max(per_map, 1))
-        n = min(n, max(1, int(self.flush_every)))
-        return (int(n),) + arr.shape[1:]
-
-    def _append(self, payload: Mapping[str, np.ndarray]) -> None:
-        missing = set(self._datasets) ^ set(payload)
-        if missing:
-            raise ValueError(
-                "every map-set must carry the same fields; this one differs in "
-                f"{sorted(missing)}"
-            )
-        row = self._n_appended
-        for name, arr in payload.items():
-            ds = self._datasets[name]
-            if arr.shape[1:] != ds.shape[1:]:
-                raise ValueError(
-                    f"{name} has shape {arr.shape[1:]} but the file holds "
-                    f"{ds.shape[1:]}"
-                )
-            ds.resize(row + 1, axis=0)
-            ds[row] = arr[0]
-
-    def _flush(self) -> None:
-        self._n_flushed_ds[()] = self._n_appended
-        self._file.flush()
-
-    # ------------------------------------------------------------------ #
-    # lifecycle
-    # ------------------------------------------------------------------ #
-
-    def _raise_deferred(self) -> None:
-        with self._lock:
-            exc = self._error
-        if exc is not None:
-            raise RuntimeError("the ZetaWriter thread failed") from exc
-
-    @property
-    def n_submitted(self) -> int:
-        """Map-sets handed to :meth:`submit`."""
-        with self._lock:
-            return self._n_submitted
-
-    @property
-    def n_written(self) -> int:
-        """Map-sets appended to the file (flushed or not)."""
-        return self._n_appended
-
-    def close(self) -> None:
-        """Drain the queue, flush and close.  Idempotent."""
-        if self._closed:
-            self._raise_deferred()
-            return
-        self._closed = True
-        self._queue.put(None)
-        self._thread.join()
-        try:
-            if self._file is not None:
-                try:
-                    if self._error is None:
-                        self._flush()
-                finally:
-                    self._file.close()
-                    self._file = None
-        finally:
-            self._raise_deferred()
-
-    def __enter__(self) -> "ZetaWriter":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        self.close()
-
-    def __len__(self) -> int:
-        return self._n_appended
+            return zetas
+        return item.get("zeta", item.get("raw", {}))  # type: ignore[no-any-return]
 
     def __repr__(self) -> str:
         return (
@@ -423,32 +217,6 @@ class ZetaWriter:
             f"written={self._n_appended}>"
         )
 
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _collect_provenance(corr: Any) -> Dict[str, Any]:
-        """Everything needed to tell two data vectors apart.
-
-        A treecode measurement is only comparable to another made with the
-        same level table, and a row-space archive only to the mask it was
-        built for -- so both go in the file.
-        """
-        from . import __version__
-
-        out: Dict[str, Any] = {"cosmofuse_version": __version__}
-        for name in _PROVENANCE_ATTRS:
-            value = getattr(corr, name, None)
-            if value is None:
-                continue
-            out[name] = value if not isinstance(value, bool) else bool(value)
-        for name in ("level_table", "row_pix_hash"):
-            try:
-                value = getattr(corr, name)
-            except Exception:
-                continue
-            out[name] = (
-                value
-                if isinstance(value, str)
-                else json.dumps(value, default=_json_default, sort_keys=True)
-            )
-        return out
+        return ResultWriter.collect_provenance(corr)

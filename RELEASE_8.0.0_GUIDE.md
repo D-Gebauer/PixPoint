@@ -38,17 +38,17 @@ the same import path, the prototype scripts keep running, and the paper repo's p
 release is undisturbed. Features B and C are independent of each other and of D; D is
 independent of both. Each stage is its own commit series with the test suite green.
 
-**Defaults (decided 2026-11-02): `pack_pairs=True`, everything else full resolution.**
+**Defaults (decided 2026-11-02, revised 2026-11-03): everything stays as in 7.7.0 -- `pack_pairs=False`, full resolution.**
 
 | argument | 7.7.0 | 8.0.0 |
 |---|---|---|
-| `pack_pairs` | `False` | **`True`** (8 B/pair on the device, quantised rotations on both backends) |
+| `pack_pairs` | `False` | `False` (unchanged; `True` = 8 B/pair on the device, quantised rotations on both backends, opt-in as before) |
 | `pack_host_pairs` | `False` | `False` (opt-in, unchanged) |
 | `resolution_factor` | `None` | `None` (full resolution) |
 | `aperture_nside` | `None` | `None` (full resolution) |
 | `cell_moments` | — | `"quad"` — inert at full resolution; acts whenever `resolution_factor` or `aperture_nside` is set |
 
-Consequences of `pack_pairs=True` by default, to be stated in the CHANGELOG: the private
+~~Consequences of `pack_pairs=True` by default~~ (moot since the default stays `False`; kept for the record): the private
 single-map `_*_single` methods, unpacked-only in 7.7.0, are made to work with packing (A3;
 the sum-of-weights precompute is gone, see A4); the rotations are the uint16-quantised
 ones on the GPU **and** the CPU backend (one estimator), so results differ from 7.7.0's
@@ -110,7 +110,14 @@ exact pixel-pair estimator.
   what a *user* can still derive from `reduce="none"` per-patch arrays, which remains true.
 - Pair file format of `Global2PCF` is unchanged (tiles are still how pairs are stored).
 
-### A3. Packing by default: the two unpacked-only paths
+### A3. Packing by default — dropped 2026-11-03: the default stays `pack_pairs=False`
+
+Decision: the default construction stays the exact, bitwise-reproducible estimator (the ground rule
+the whole test suite leans on); packing is a memory optimisation one turns on knowingly when the
+geometry does not fit, and flipping the default would have moved every result by ~1e-6 relative
+and forced the lazy-upload plumbing below for the test references alone. Nothing to do. The plan
+as it was:
+
 
 - **Single-map references** (`_gg_single`, `_kk_single`, `_kg_single`): no package caller,
   ~70 call sites in ten test files as the per-pair reference for the tiled kernels — keep
@@ -440,8 +447,9 @@ treecode estimator, identical for data and simulations (see the science caveats)
   does not re-upload. `moments (nz, nscale, 5)` are k = 1..5 raw (central 2..5 derived).
 - D2.5: `device=[...]` splits centres by disc pixel count (`balanced_ranges`), parts add; the
   result holds *sums* (`power_sums`, `cross_sums`, `hist`, `count`, `n_apertures`) so `+` is
-  exact. **No writer yet** -- `OnePointWriter` / a labelled-array `ZetaWriter` is the open
-  follow-up (the arrays are small: a per-map `OnePointResult` is ~kB).
+  exact. Writer: done -- `ResultWriter` (`result_writer.py`) is the labelled-array base
+  (`ZetaWriter` now subclasses it, same file layout and tests), `OnePointWriter` streams the
+  sums per map with scales/edges/names written once; `result_arrays()` serves the global results.
 - D2.6: documented (module docstring, README, `docs/estimator_note.md` §5).
 - D3 gates 1–5 all in `tests/test_onepoint.py` (gate 5's "kernel signature/twin" part is void
   without a new kernel; the emulated-GPU test patches every engine's backend instead), plus the

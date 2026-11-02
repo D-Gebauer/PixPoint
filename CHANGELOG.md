@@ -64,9 +64,13 @@ analysis's job.
   Measured (A100, `benchmarks/moments/RESULTS.md`): the T10 ζ-level price
   of k = 2.9 falls from 0.27 to 0.20 σ_patch and of k = 1.5 from 0.81 to
   0.39 (ζ_a,−; ζ_a,+ is a binning window and unchanged); the cost is nil at
-  one source bin but the quad tile spills registers at four (gg 1.6 → 5.4
-  ms at nside 1024, k = 4; dipole 2.4 ms) -- a register-allocation fix is
-  pending, the data vector does not depend on it.
+  one source bin; at four the quad tile first spilled registers (gg 1.6 →
+  5.4 ms at nside 1024, k = 4). The moment tiles now load the two ends'
+  contractions inside the (bin, bin) double loop instead of caching them per
+  end (`tri_index`; same operations, same accumulation order, bitwise the
+  same sums): the ξ± tile needs 168 registers and no local memory at nz = 4,
+  and quad `gg` costs 3.7 ms unpacked / 3.2 ms packed (mono 2.6 / 2.0,
+  dipole 2.4; `benchmarks/moments/RESULTS.md`, B5).
 - **Moment-carrying aperture cells** (`aperture_nside` with `cell_moments`).
   The aperture is the γ_t pair statistic between the patch centre and the
   disc cell, so the same cells fix the tangential phase and, with the
@@ -117,6 +121,16 @@ analysis's job.
   reduction floor and ~2 ms the Σw pass; `aperture_nside` with quad cells at nz = 4 saves memory
   (4×/16×) but no time (the cell moments are 192 B per disc entry). Prices of
   the windows on the PDF: pending.
+- **`ResultWriter`, `OnePointWriter`** (`CosmoFuse/result_writer.py`). The
+  streaming HDF5 writer is now a base every estimator shares: one row per
+  map under one group, provenance in the file attributes, `constants/`
+  written once, `flush_every` / `n_flushed` / `resume` / SWMR as before.
+  `ZetaWriter` is a subclass (same file layout, same tests), `OnePointWriter`
+  streams `OnePointResult`s (sums, histogram, optional values; scales, edges,
+  names and cross index written once), and a `TwoPointResult` /
+  `ThreePointResult` streams through the plain base via `result_arrays()`.
+  `ResultWriter.collect_provenance(estimator)` is the provenance of any
+  estimator (an `OnePoint` contributes its `provenance` property).
 - **Surface that was not the estimator's, removed.** `Integrated3PCF.zeta_*`
   (8 methods) and `Integrated3PCF.calculate_all_zetas` were pass-throughs to
   the `correlation_helpers` functions, duplicated by `IntegratedResult.zetas()`;

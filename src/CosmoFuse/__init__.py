@@ -34,6 +34,7 @@ from .global_2pcf import Global2PCF
 from .global_3pcf import Global3PCF
 from .onepoint import OnePoint
 from .pipeline import MapFileLoader, MapLoader
+from .result_writer import OnePointWriter, ResultWriter, result_arrays
 from .results import (
     Component,
     IntegratedResult,
@@ -57,6 +58,9 @@ __all__ = [
     "IntegratedResult",
     "OnePoint",
     "OnePointResult",
+    "OnePointWriter",
+    "ResultWriter",
+    "result_arrays",
     "ThreePointResult",
     "TwoPointResult",
     "DEFAULT_RESOLUTION_FACTOR",

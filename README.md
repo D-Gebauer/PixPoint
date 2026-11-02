@@ -417,6 +417,22 @@ with `resume=True`: anything written past the last flush is discarded and append
 `swmr=True` lets another process follow the file as it grows; it is off by default because a
 crashed SWMR file keeps a stale write lock (`h5clear -s` releases it).
 
+`ZetaWriter` is one face of `ResultWriter`, the streaming HDF5 writer every estimator shares
+(one row per map, provenance in the attributes, `flush_every`, `n_flushed`, `resume`, optional
+SWMR). `OnePointWriter(path, op)` streams `OnePoint` results the same way (histogram and moment
+sums per map, scales and edges written once), and a `Global2PCF` / `Global3PCF` result streams
+through the plain base:
+
+    from CosmoFuse import OnePointWriter, ResultWriter, result_arrays
+
+    with OnePointWriter("pdf.h5", op) as out:
+        for shear, w in map_sets:
+            out.submit(op.g(shear, w))
+
+    with ResultWriter("xi.h5", ResultWriter.collect_provenance(g2), group="gg") as out:
+        for shear, w in map_sets:
+            out.submit(result_arrays(g2.gg(shear, w)))
+
 ## One-point statistics: `OnePoint`
 
 The distribution of an aperture field over the footprint -- the aperture-mass PDF of a shear

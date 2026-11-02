@@ -1,4 +1,4 @@
-# The CosmoFuse i3PCF estimator, and its static-treecode variant
+# The PixPoint i3PCF estimator, and its static-treecode variant
 
 A self-contained definition of what `Integrated3PCF` measures, written so that
 it can be restated in a paper appendix. Version 7.0.0 (the footprint-wide
@@ -41,7 +41,7 @@ for galaxy-galaxy lensing (lens pixel $p$, source pixel $q$).
 
 **Tomography.** For a combination of tomographic bins $(i,j)$ with $i \ne j$
 each pixel pair contributes in both orientations (bin $i$ at $p$ and $j$ at
-$q$, and vice versa). CosmoFuse takes the **ratio of the summed orientations**,
+$q$, and vice versa). PixPoint takes the **ratio of the summed orientations**,
 
 $$ \xi^{(b),ij} = \frac{N^{(b)}_{ij} + N^{(b)}_{ji}}{W^{(b)}_{ij} + W^{(b)}_{ji}}, $$
 

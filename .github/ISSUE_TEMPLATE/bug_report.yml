@@ -1,0 +1,33 @@
+name: Bug report
+description: Something gives a wrong result, crashes or refuses to run.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got. Paste the full error message if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: A short script on a small synthetic map (a few thousand pixels is usually enough) that shows the problem.
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PixPoint version
+      description: "`python -c 'import pixpoint; print(pixpoint.__version__)'`"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, Python version, CPU or GPU; for a GPU the CuPy and CUDA versions.
+    validations:
+      required: true

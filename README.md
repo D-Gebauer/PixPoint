@@ -1,614 +1,108 @@
-[![CI](https://github.com/D-Gebauer/CosmoFuse/actions/workflows/ci.yml/badge.svg)](https://github.com/D-Gebauer/CosmoFuse/actions/workflows/ci.yml)
+# PixPoint
 
-[![codecov](https://codecov.io/github/D-Gebauer/CosmoFuse/graph/badge.svg?token=F4JC08UEJP)](https://codecov.io/github/D-Gebauer/CosmoFuse)
+[![CI](https://github.com/D-Gebauer/PixPoint/actions/workflows/ci.yml/badge.svg)](https://github.com/D-Gebauer/PixPoint/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/github/D-Gebauer/PixPoint/graph/badge.svg?token=F4JC08UEJP)](https://codecov.io/github/D-Gebauer/PixPoint)
+[![Documentation](https://readthedocs.org/projects/pixpoint/badge/?version=latest)](https://pixpoint.readthedocs.io)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**Correlation functions of HEALPix maps, fast.**
 
+PixPoint measures two-point, three-point, integrated three-point and one-point
+statistics of cosmological fields on HEALPix maps: cosmic shear, galaxy
+clustering, galaxy-galaxy lensing, convergence. You give it maps and weights,
+it gives you labelled results. The pixel pairs of a footprint are found once
+and reused for every map, so a simulation suite costs one pair search and one
+fast pass per map, on a CPU or, with the same code, on NVIDIA GPUs.
 
-# CosmoFuse
+```python
+from pixpoint import Global2PCF
 
-A Python package for measuring integrated 3-point correlation functions (i3PCFs), as well as
-footprint-wide two- and three-point correlation functions, on HEALPix maps, on GPU or CPU.
+g2 = Global2PCF(nside=512, mask=mask, nbins=20, theta_min=2.5, theta_max=250)
+g2.preprocess()                          # find the pixel pairs once (save_pairs / load_pairs to reuse)
 
-Four estimators share one vocabulary: methods are TreeCorr's field codes (`g` = shear,
-`k` = scalar field such as an overdensity δ), and every call returns a labelled result object.
+res = g2.gg(shear_maps, weights)         # shear_maps (nz, 2, npix), weights (nz, npix)
+res.theta                                # bin centres, arcmin
+res.xi_p, res.xi_m                       # (n_combinations, nbins)
+res.combinations                         # which tomographic bins each row is
 
-| class | measures | methods | result |
+g2.kk(delta_maps, w_cov).xi              # clustering w(theta)
+g2.kg(delta_maps, shear_maps, w_lens, w_source).xi   # galaxy-galaxy lensing gamma_t
+```
+
+**Documentation: [pixpoint.readthedocs.io](https://pixpoint.readthedocs.io)**,
+starting with [Getting started](https://pixpoint.readthedocs.io/en/latest/quickstart.html).
+
+## What it measures
+
+| estimator | measures | methods | result |
 |---|---|---|---|
-| `Integrated3PCF` | per-patch apertures and 2PCFs (the i3PCF ingredients) | `gg`, `kk`, `kg`, `three_by_two_pt`, `m_a`, `m_g` | `IntegratedResult` |
-| `Global2PCF` | 2PCFs of the whole footprint | `gg`, `kk`, `kg`, `three_by_two_pt` | `TwoPointResult` |
-| `Global3PCF` | 3PCF multipoles of the whole footprint | `ggg`, `kkk`, `kgg`, `kkg`, `measure` | `ThreePointResult` |
-| `OnePoint` | PDFs and moments of aperture fields over the footprint | `g`, `k` | `OnePointResult` |
+| `Global2PCF` | two-point functions of the whole footprint: ξ±, w(θ), γ_t | `gg`, `kk`, `kg`, `three_by_two_pt` | `TwoPointResult` |
+| `Global3PCF` | three-point functions of the whole footprint, by multipoles | `ggg`, `kkk`, `kgg`, `kkg`, `measure` | `ThreePointResult` |
+| `Integrated3PCF` | aperture masses and 2PCFs in patches: the integrated 3PCF | `gg`, `kk`, `kg`, `three_by_two_pt`, `m_a`, `m_g` | `IntegratedResult` |
+| `OnePoint` | PDFs and moments of aperture mass and smoothed scalar fields | `g`, `k` | `OnePointResult` |
 
-The integrated 3-point correlation function probes squeezed configurations of the bispectrum without the computational expense of the full 3-point correlation function.
+Method names follow TreeCorr's field codes: `g` is a shear field, `k` a scalar
+field such as a density contrast or convergence map. Every estimator is
+tomographic, and every result carries the labels of its rows.
 
-### 1. Cosmic Shear ($\zeta_{a,+}$ and $\zeta_{a,-}$)
+## Why PixPoint
 
-The shear i3PCFs are calculated as correlations between central aperture mass $M_a$ and annular shear 2PCFs $\xi_\pm$:
-
-$$ \zeta_{a,+} = \langle M_a \, \xi_+ \rangle, \quad \zeta_{a,-} = \langle M_a \, \xi_- \rangle $$
-
-On a pixelated map, the aperture mass is calculated as:
-
-$$ M_a = \frac{A \sum_{\text{p}}{w_p g_t Q_p}}{\sum_{\text{p}}{w_p}} $$
-
-where $g_t$ is the tangential shear. The shear 2PCFs are calculated as:
-
-$$ \xi_+ = \frac{\sum_{\text{pairs}}{w_1 w_2 \, g_1' g_2'^*}}{\sum_{\text{pairs}}{w_1 w_2}}, \quad \xi_- = \frac{\sum_{\text{pairs}}{w_1 w_2 \, g_1' g_2'}}{\sum_{\text{pairs}}{w_1 w_2}} $$
-
-where $g' = g\,e^{-2i\varphi}$ is the shear rotated into the frame of the pair
-($\varphi$ the position angle of the separation vector at that pixel, one per
-pair member). The rotation is not optional bookkeeping: without it $\xi_-$ is
-not invariant under a rotation of the coordinate frame.
-
-### 2. Galaxy Clustering ($\zeta_{g,g}$)
-
-The clustering i3PCF is the correlation between central aperture count $M_g$ and annular galaxy auto-correlation $\xi_g$:
-
-$$ \zeta_{g,g} = \langle M_g \, \xi_g \rangle $$
-
-The aperture number count is given by:
-
-$$ M_g = \frac{\sum_{p \in W}{w_p \delta_{g,p}}}{\sum_{p \in W}{w_p}} $$
-
-the weighted mean of the galaxy overdensity (or counts) $\delta_g$ over the patch $W$ (the unmasked pixels within `patch_size` of the centre, where the annular 2PCFs are measured), as in [Halder et al. (2023)](https://arxiv.org/abs/2305.17132), eq. 3.11. A filter can replace it (see [Aperture filters](#aperture-filters)). The annular galaxy auto-correlation is:
-
-$$ \xi_g = \frac{\sum_{\text{pairs}}{w_1 w_2 \delta_1 \delta_2}}{\sum_{\text{pairs}}{w_1 w_2}} $$
-
-### 3. Galaxy-Galaxy Lensing ($\zeta_{g,t}$)
-
-The GGL i3PCF couples central aperture count (lenses) with annular tangential shear (sources):
-
-$$ \zeta_{g,t} = \langle M_g \, \xi_t \rangle $$
-
-where $M_g$ is calculated on the lens map as above. The tangential shear estimator is:
-
-$$ \xi_t = \frac{\sum_{\text{pairs}}{w_l w_s \delta_l g_{s,t}}}{\sum_{\text{pairs}}{w_l w_s}} $$
-
-where $\delta_l$ is the lens overdensity and $g_{s,t}$ is the source tangential shear relative to the lens.
-
-## Features
-
-- Calculate pairs for given mask & resolution once
-- Save/Load pairs using hdf5 files
-- Reuse pairs to measure i3PCFs across maps
-- Footprint-wide 2PCFs (ξ±, w(θ), γ_t) as ratios of sums over every pixel pair
-- Footprint-wide 3PCFs (shear Γ₀…Γ₃, scalar ζ, any mixed spin-0/spin-2 triplet) by multipole decomposition
-- Tomographic measurements of all probes on CPU and GPU
-- Automatic patch-center selection from a survey mask (optionally weighted by the compensated filter)
-- Modular aperture filters: compensated shear filters for $M_a$ (Crittenden et al. 2002 by default; Schneider et al. 1998 included), the patch mean (default, as in Halder et al. 2023) or a filter — e.g. the compensated convergence partners — for $M_g$
-- Fully type-annotated (`mypy --strict` clean, ships `py.typed`)
+- **Exact pixel-pair estimators.** The two-point functions are ratios of
+  weighted sums over every pair of unmasked pixels, and agree with TreeCorr on
+  the pixel centres to rounding.
+- **Find pairs once, measure many maps.** A full-footprint tomographic shear
+  2PCF of DES Y3 at nside 512 (6.7 × 10⁸ pairs) takes 33 ms per map on an A100
+  after a one-off pair search; the same code runs on a laptop CPU.
+- **Everything in one vocabulary.** Shear, clustering, galaxy-galaxy lensing
+  and 3×2pt from one object; 3PCF multipoles for any mix of spin-0 and spin-2
+  fields; the integrated 3PCF with its aperture filters; aperture-mass PDFs
+  and moments.
+- **Built for suites.** Streaming HDF5 writers with provenance and resume,
+  loaders that hide the upload behind the measurement, multi-GPU splitting,
+  and an optional treecode that cuts the pair count at large separations.
+- **Checked.** Every GPU kernel has a NumPy twin and a brute-force reference
+  test at machine precision; `mypy --strict` clean; ships `py.typed`.
 
 ## Installation
-Requires Python >= 3.12. Install using:
 
-    pip install git+https://github.com/D-Gebauer/CosmoFuse.git
+Python 3.12 or newer:
 
-Note: for GPU execution, install CuPy in your environment. The kernels are compiled at run time by
-NVRTC as C++20, so CUDA ≥ 12 is required (e.g. `cupy-cuda13x`, tested with CuPy 14.2 / CUDA 13.0).
-
-## USAGE
-
-First create an Integrated3PCF object:
-
-    from CosmoFuse import Integrated3PCF
-    correlation = Integrated3PCF(
-        nside,                              # resolution of healpy maps
-        phi_center, theta_center,           # patch centers (radians)
-        patch_size=90,                      # patch size (arcminutes)
-        theta_Q=90,                         # compensated filter scale (arcminutes)
-        nbins=10,                           # number of angular bins
-        theta_min=10, theta_max=170,        # angular range (arcminutes)
-        mask=mask,                          # mask
-        fastmath=False,                     # numba/cupy fastmath toggle
-        device="auto",                      # "cpu", "gpu", "auto", a GPU id, or a list of GPU ids
-        map_precision="float32",            # float32 / float64
-        rotation_precision="float32",       # float32 / float64
-        accumulation_precision="float64",   # "same" / "float64"
-        resolution_factor=None,             # None = full resolution; True (k=4) or a number k: static treecode
-        cell_moments="quad",                # what a coarse cell carries: "quad", "dipole" or None (plain cells)
-        aperture_nside=None,                # coarser nside for the aperture statistics (None = nside)
-        memory_budget_gb=None,              # pair-memory budget of the preflight check (None = free device memory)
-        pair_search_precision="float64",    # "float64" / "float32"
-        pack_pairs=False,                   # 8-byte pairs on the device
-        pack_host_pairs=False,              # 8-byte pairs in host RAM and in the pair file too
-    )
-
-For GPU runs use `map_precision="float32", accumulation_precision="float64"`: the maps are
-handled at float32, every pair sum is accumulated at float64. Keep `map_precision="float64"`
-when agreement with a float64 reference at machine precision is required.
-
-**Static treecode and moment-carrying cells.** With `resolution_factor=k` every angular bin is
-measured on the coarsest HEALPix level whose pixel is smaller than θ_lo / k: the pixels of a
-patch are grouped into cells (binary-mask centroids) carrying the weight sum and the weighted
-mean, which cuts the pair count by orders of magnitude at large separations. That is a
-*windowed* estimator (use the same `resolution_factor` for data, simulations and covariances;
-`level_table` records it). Rotating every child pair with its parents' position angle
-suppresses ξ− by ⟨cos 4δφ⟩ and γ_t by ⟨cos 2δφ⟩; `cell_moments="quad"` (default) adds the
-dipole and quadrupole of the transported shear to every coarse cell and corrects those
-phases to second order in the children's offsets, which removes almost all of the ξ−
-suppression and its information loss (`"dipole"`: first order, cheaper, information fix
-only; `None`: the plain cells). The same cells correct the aperture statistics measured on a
-coarse `aperture_nside` level (tangential phase and the filter's variation across a cell).
-Nothing of this runs at full resolution.
-
-### Selecting patch centers from a mask
-
-Instead of providing patch centers manually, they can be selected automatically from a survey footprint. Candidate centers are the pixel centers of a coarse `nside_centers` HEALPix grid (which controls the patch oversampling density); a candidate is accepted if the masked fraction of the full-resolution mask stays below `f_mask` within the 2PCF patch disc (radius `patch_size`) and below `f_mask_filter` (default: `f_mask`) within the aperture-mass filter disc (radius $5\,\theta_Q$):
-
-    from CosmoFuse import select_patch_centers
-
-    phi_center, theta_center = select_patch_centers(
-        mask,                    # HEALPix footprint (nonzero = observed)
-        nside_centers=32,        # candidate-center grid resolution
-        patch_size=90,           # patch radius (arcminutes)
-        theta_Q=90,              # compensated filter scale (arcminutes)
-        f_mask=0.2,              # max masked fraction in the patch disc
-        filter_weighting="abs",  # "abs" / "signed"
-    )
-    correlation = Integrated3PCF(nside, phi_center, theta_center, mask=mask, ...)
-
-or, in one step:
-
-    correlation = Integrated3PCF.from_mask(
-        nside, mask, nside_centers=32,
-        patch_size=90, theta_Q=90, f_mask=0.2,
-        nbins=10, theta_min=10, theta_max=170,
-    )
-
-With `filter_weighting="abs"` (default) the aperture-mass disc check weights each pixel by the compensated filter instead of counting pixels — the masked fraction becomes $\sum_{\rm masked} |Q(\theta)| \,/\, \sum_{\rm all} |Q(\theta)|$ — so holes near the edge of the disc (where the filter carries almost no weight) no longer veto a patch, while holes at the filter peak count more. The magnitude $|Q|$ is used because compensated filters can be negative at large radii; `"signed"` uses $|\sum_{\rm masked} Q|$ instead. A custom `aperture_filter` can be supplied for the weighting (same calling convention as `preprocess`, see [Aperture filters](#aperture-filters)); the 2PCF patch-disc check always uses the raw pixel fraction.
-
-Then Calculate pairs:
-
-    correlation.preprocess()
-
-`preprocess()` accepts an `aperture_filter` (the shear filter $Q$ of $M_a$, default `Q_crittenden`) and a `k_aperture_filter` (a scalar filter $U$ for $M_g$; default: the patch mean); see [Aperture filters](#aperture-filters).
-
-Optionally, the one-off Numba JIT compilation of the measurement kernels can be moved out of the first measurement call:
-
-    correlation.warmup()
-
-You can also release host-side pair arrays immediately after preprocessing:
-
-    correlation.preprocess(release_host_pairs=True)
-
-If host RAM is limited for large runs, you can optionally release host-side pair arrays after preparing backend buffers:
-
-    correlation.prepare(release_host_pairs=True)
-
-This keeps only arrays needed for later computations in memory. Save pairs before releasing host arrays (or reload/recompute before saving again).
-
-These can be saved & loaded using:
-
-    correlation.save_pairs("/path/to/pairs.h5")
-    correlation.load_pairs("/path/to/pairs.h5")
-
-To load pairs and immediately release host-side pair arrays after backend preparation:
-
-    correlation.load_pairs("/path/to/pairs.h5", release_host_pairs=True)
-
-Pair files of format version 1 (written before 5.0) are no longer readable and have to be regenerated.
-
-`pack_pairs=True` stores the pair geometry on the device in 8 instead of 24 bytes per pair, so about
-three times as many pairs fit on a GPU. `pack_host_pairs=True` applies the same packing in host RAM
-and in the pair file:
-
-    correlation = Integrated3PCF(..., pack_pairs=True, pack_host_pairs=True)
-    correlation.preprocess()
-    correlation.save_pairs("/path/to/pairs.h5")
-
-Both are off by default. Packing moves each estimate by ~1e-5 of its statistical error without biasing
-it, but a packed pair file cannot be turned back into an exact one, so keep an exact file if you may
-want to switch later.
-
-### Aperture filters
-
-The aperture statistics are evaluated for all pixels within $5\,\theta_Q$ of each patch center, each with its own filter:
-
-- $M_a$ (shear) projects the shear tangentially and convolves it with a filter $Q(\theta)$ — by default the compensated `Q_crittenden`;
-- $M_g$ (any scalar field: δ or κ) is by default the weighted mean of the field over the patch disc, $\sum_W w f / \sum_W w$ over the unmasked pixels within `patch_size` of the centre. That is the top-hat window of the patch 2PCFs, as in [Halder et al. (2023)](https://arxiv.org/abs/2305.17132) (eq. 3.11, "the mean of the pixel values" for unit weights). With `aperture_nside` it is the patch mean of the map degraded to that level. A filter $U(\theta)$ replaces it with the filter aperture $A \sum w f U / \sum w$ over the $5\,\theta_Q$ disc of $M_a$.
-
-Filters are modular: any callable `f(theta, theta_Q)` (with `theta` in radians and `theta_Q` in arcminutes; a single-argument `f(theta)` also works) can be passed. The `aperture_filter` keyword is the filter of the aperture the method measures: $Q$ for `m_a`/`gg`, $U$ for `m_g`/`kk`. `kg`, `three_by_two_pt`, `preprocess()` and `find_aperture_pairs()` measure (or prepare) both, so there `aperture_filter` is $Q$ and `k_aperture_filter` is $U$ (`None`, the default, is the patch mean). A filter $U$ reuses the aperture discs of $M_a$; changing it does not repeat the disc search. `select_patch_centers()` and `Integrated3PCF.from_mask()` take an `aperture_filter` for the mask check.
-
-**`U_tophat`** — a top-hat *filter* of radius $\theta_Q$ on the aperture discs, normalised over the spherical cap (the 7.6.1 default; the 7.6.2 default above is the exact patch mean instead):
-
-$$ U(\theta) = \frac{1}{2\pi\,(1 - \cos\theta_Q)} \;\; \text{for } \theta \le \theta_Q, \qquad U(\theta) = 0 \;\; \text{for } \theta > \theta_Q $$
-
-With uniform weights, $M_g$ is the mean of the field in the cap (up to the pixelisation of the cap area). The normalisation $A \sum w f U / \sum w$ runs over the observed pixels of the whole $5\,\theta_Q$ disc, so a masked pixel inside the cap lowers $M_g$ instead of being renormalised away. Pass `aperture_filter=U_tophat` to `select_patch_centers()` to bound that.
-
-**Convergence aperture mass.** For a κ map, the compensated $U$ partners of the shear filters below, `U_crittenden` and `U_schneider`, measure the aperture mass $M_{\rm ap} = \int U \kappa \,\mathrm{d}\Omega = \int Q \gamma_t \,\mathrm{d}\Omega$. It equals $M_a$ on the matching shear field up to the mask and the pixelisation (slope 1.0015 between the two at $\theta_Q$ = 13 pixels):
-
-    from CosmoFuse import U_crittenden
-
-    res = correlation.kk(kappa_maps, weights, aperture_filter=U_crittenden)
-    res.M_g, res.xi_g      # M_ap of κ, ξ_κκ
-
-Two tangential-shear filters $Q$ ship with the package:
-
-**`Q_crittenden` (default)** — the exponential compensated filter of [Crittenden et al. (2002)](https://arxiv.org/abs/astro-ph/0012336), as used for the i3PCF in [Halder et al. (2021)](https://arxiv.org/abs/2102.10177):
-
-$$ Q(\theta) = \frac{\theta^2}{4\pi\theta_Q^4} \exp\left(-\frac{\theta^2}{2\theta_Q^2}\right) $$
-
-It peaks at $\theta = \sqrt{2}\,\theta_Q$ and has decayed to below $10^{-3}$ of its peak value at the $5\,\theta_Q$ truncation radius.
-
-**`Q_schneider`** — the polynomial ($\ell = 1$) compensated filter of [Schneider et al. (1998)](https://arxiv.org/abs/astro-ph/9708143), which has compact support:
-
-$$ Q(\theta) = \frac{6}{\pi\theta_Q^2}\, x^2 \left(1 - x^2\right) \;\; \text{for } x = \theta/\theta_Q \le 1, \qquad Q(\theta) = 0 \;\; \text{for } \theta > \theta_Q $$
-
-Pixels between $\theta_Q$ and the $5\,\theta_Q$ aperture disc simply receive zero weight.
-
-Both filters are normalised to $\int Q(\theta)\, \mathrm{d}\Omega = 1$, so aperture masses measured with either are directly comparable:
-
-    from CosmoFuse import Q_crittenden, Q_schneider
-
-    correlation.preprocess(aperture_filter=Q_schneider)
-
-### Measuring correlations
-
-Method names are TreeCorr's field codes: `g` is a shear field (spin 2), `k` a
-scalar field -- an overdensity map δ or a convergence map.  The class says
-*what* is measured, the method *which fields*:
-
-| `Integrated3PCF` method | measures (per patch) | result fields |
-| :--- | :--- | :--- |
-| `gg(shear_maps, w)` | ξ± and the aperture mass at the patch centre | `M_a`, `xi_p`, `xi_m` |
-| `kk(k_maps, w)` | w(θ) (field estimator on δ or κ) and the scalar aperture | `M_g`, `xi_g` |
-| `kg(k_maps, shear_maps, k_w, shear_w, m_g=False, m_a=False)` | γ_t of lens δ × source shear (+ optional apertures) | `xi_t` (`M_g`, `M_a`) |
-| `three_by_two_pt(shear_maps, k_maps, weights)` | all six in one fused pass | all six |
-| `m_a(shear_maps, w)`, `m_g(k_maps, w)` | apertures only | array `(nz, n_patches)` |
-
-`gg` and `kk` measure the apertures too by default; pass `apertures=False` for
-the 2PCFs alone.  Inputs are full-sky
-(`(nz, [2,] npix)`) or row-space (`(nz, [2,] n_active)`) arrays.
-
-Every call returns a labelled `IntegratedResult` -- fields that were not
-measured are `None`, and the rows of every 2PCF come with their tomographic
-labels:
-
-```python
-res = correlation.gg(shear_maps, weights, flip_g1=True)
-res.M_a.shape            # (nz, n_patches)
-res.xi_p.shape           # (nz(nz+1)/2, n_patches, nbins)
-res.gg_combinations      # ((0, 0), (0, 1), ...) -- which bins each row of xi_p/xi_m is
-res.theta                # bin centres in arcmin
-
-res = correlation.kg(delta_maps, shear_maps, w_lens, w_source, m_g=True)
-res.xi_t, res.M_g, res.kg_combinations      # rows as (lens_bin, source_bin)
-
-res = correlation.three_by_two_pt(
-    shear_maps, delta_maps, weights={"shear": shear_w, "density": density_w},
-)
-zetas = res.zetas()      # every i3PCF the measured fields form
+```bash
+pip install git+https://github.com/D-Gebauer/PixPoint.git
 ```
 
-The TreeCorr equivalents (on a catalogue of the pixel centres, `metric="Arc"`)
-are `GGCorrelation` for ξ±, `KKCorrelation` with `k = δ` for w(θ) and
-`KGCorrelation` for γ_t.  With coverage-fraction weights the `kk` field
-estimator is exactly Landy-Szalay with randoms at the pixel centres.
-
-#### Probes & Inputs
-
-| Probe | Aperture | 2PCF | Inputs |
-| :--- | :--- | :--- | :--- |
-| **Shear** (`gg`) | Aperture mass ($M_a$) | $\xi_\pm$ | Shear maps ($g_1, g_2$), weights |
-| **Clustering** (`kk`) | Aperture count ($M_g$) | $w(\theta)$ | Overdensity maps δ, weights (coverage) |
-| **GGL** (`kg`) | $M_g$ (and $M_a$) | $\gamma_t$ | Lens δ + source shear |
-
-#### Host or device arrays (`return_device`)
-
-`return_device` defaults to `True`: on a GPU backend the result's arrays are cupy arrays, which
-is what keeps a device-resident pipeline (`MapLoader`, `ZetaWriter`) off the PCIe bus. Pass
-`return_device=False` or call `res.to_numpy()` for numpy. A multi-device instance always returns
-numpy. Each call allocates its own outputs, so collecting results across realisations is safe.
-
-#### Which row is which pair of bins
-
-Results carry their row labels (`gg_combinations`, `kk_combinations`,
-`kg_combinations`).  The same orders are available without measuring:
-
-```python
-Integrated3PCF.tomo_combinations(4)                  # xi_p / xi_m / xi_g rows: [(0,0), (0,1), ...]
-Integrated3PCF.tomo_combinations(4, auto_only=True)  # kk(auto_only=True): the diagonal only
-Integrated3PCF.kg_combinations(2, 4)                 # xi_t rows as (lens_bin, source_bin)
-Integrated3PCF.zeta_triplets(4)                      # same-sample zeta rows: (z_center, z2, z3)
-Integrated3PCF.zeta_cross_triplets(5, 10)            # cross-sample zeta rows: (z_center, annulus_row)
-```
-
-`auto_only=True` changes the length of the $\xi_g$ vector from `nz(nz+1)/2` to
-`nz` -- a shape check will not catch a mislabelled data vector, so use the labels.
-
-A ζ estimator uses `zeta_triplets` when its centre and its annulus are built
-from the **same** sample (`zeta_a_plus`, `zeta_a_minus`, `zeta_g_g`) and
-`zeta_cross_triplets` when they are not (`zeta_g_plus`, `zeta_g_minus`,
-`zeta_a_g`, `zeta_g_t`, `zeta_a_t`) -- see below.
-
-### Overlapping uploads with compute (GPU)
-
-On a GPU the upload of a map-set costs about as much as the measurement. Two loaders
-hide it behind the previous map's measurement (both are passthroughs on CPU backends).
-
-`MapLoader` is for maps that are already in host arrays:
-
-```python
-from CosmoFuse import MapLoader
-
-pipe = MapLoader(correlation, {"shear": (nz, 2, npix), "w": (nz, npix)})
-dev = pipe.wait(pipe.stage({"shear": shear_np[0], "w": w_np[0]}))
-for k in range(nmaps):
-    nxt = pipe.stage({"shear": shear_np[k + 1], "w": w_np[k + 1]}) if k + 1 < nmaps else None
-    results.append(correlation.gg(dev["shear"], dev["w"]))
-    dev = pipe.wait(nxt)
-```
-
-`MapFileLoader` is for maps read from disk: `n_readers` threads read into `n_slots`
-buffers and hand the device arrays to you in order.
-
-```python
-from CosmoFuse import MapFileLoader
-
-def read(source, out):                    # runs in a reader thread
-    out["shear"][...] = np.load(source, mmap_mode="r")
-
-loader = MapFileLoader(
-    correlation, {"shear": (nz, 2, correlation.n_active)},
-    sources=files, read_fn=read, n_slots=8, n_readers=4,
-    row_pix_hash=correlation.row_pix_hash,   # optional archive/mask check
-)
-for k, dev in loader:
-    results.append(correlation.gg(dev["shear"], w))
-```
-
-Store the maps in row space (`correlation.to_row_space(full_sky_maps)`, done once when the
-archive is written) so no gather is needed per map. Pass fixed weight maps as a read-only array
-(`w.flags.writeable = False`) so they are uploaded once. The device arrays handed out are only
-valid until the next iteration.
-
-On GPU backends `warmup()` does nothing: the CUDA kernels are compiled on the first measurement
-call, so make one throwaway call before timing a loop.
-
-### Several GPUs
-
-Passing a list of GPU ids splits the patches across those devices and concatenates the outputs
-in patch order. The result is identical to a single-device run, and each GPU holds only its share
-of the pairs, which is how a geometry too large for one card is measured.
-
-```python
-correlation = Integrated3PCF(nside, phi_center, theta_center, device=[0, 1], ...)
-correlation.preprocess()          # or load_pairs(path): each device takes its own slice
-res = correlation.gg(shear_maps, weights)
-```
-
-Write pair files from a single-device instance; a multi-device group only
-reads them.
-
-The global estimators take a list too: `Global2PCF` splits its tiles and `Global3PCF` its
-centres across the devices, in contiguous ranges with about equal pair counts
-(`tile_ranges`, `centre_ranges`). Every device holds its share of the pairs and a copy of the
-maps, since a pair can reach into a tile another device owns. `Global2PCF` returns exactly the
-single-device result; `Global3PCF` adds the devices' multipoles, which changes only the summation
-order. Both can write pair files from a group. As for `Integrated3PCF`, a multi-device call takes
-host arrays and returns host results.
-
-### Streaming zetas to a file
-
-For long runs, `ZetaWriter` reduces each map-set to its i3PCFs and appends them to
-HDF5 from a background thread, instead of holding every per-patch array in RAM until
-the end:
-
-    from CosmoFuse import ZetaWriter
-
-    with ZetaWriter("zetas.h5", correlation, flush_every=50) as out:
-        for shear, w in map_sets:
-            out.submit(correlation.gg(shear, w))
-
-`submit()` takes any `Integrated3PCF` result (`gg`, `kk`, `kg`, `three_by_two_pt`) -- or an
-`IntegratedResult` built by hand -- holding at least one central and one annular field. It blocks
-once `depth` map-sets are queued, so memory stays bounded and a writer that falls behind cannot go
-unnoticed.
-
-Each map-set is reduced to its i3PCFs the moment it is measured (zeta averages over patches, not
-over maps), so only the ~9 kB data vector per map-set is kept instead of the ~1 MB of per-patch
-arrays. Pass `reduce="none"` to store the per-patch arrays instead; zeta, a leave-one-patch-out
-jackknife or a different binning can all still be derived from those.
-
-The file records `n_flushed`, the number of map-sets guaranteed to be on disk, and enough
-provenance (`level_table`, `row_pix_hash`, nside, bins, `resolution_factor`) that a data vector
-cannot be silently combined with one measured under a different estimator. After a crash, reopen
-with `resume=True`: anything written past the last flush is discarded and appending continues.
-`swmr=True` lets another process follow the file as it grows; it is off by default because a
-crashed SWMR file keeps a stale write lock (`h5clear -s` releases it).
-
-`ZetaWriter` is one face of `ResultWriter`, the streaming HDF5 writer every estimator shares
-(one row per map, provenance in the attributes, `flush_every`, `n_flushed`, `resume`, optional
-SWMR). `OnePointWriter(path, op)` streams `OnePoint` results the same way (histogram and moment
-sums per map, scales and edges written once), and a `Global2PCF` / `Global3PCF` result streams
-through the plain base:
-
-    from CosmoFuse import OnePointWriter, ResultWriter, result_arrays
-
-    with OnePointWriter("pdf.h5", op) as out:
-        for shear, w in map_sets:
-            out.submit(op.g(shear, w))
-
-    with ResultWriter("xi.h5", ResultWriter.collect_provenance(g2), group="gg") as out:
-        for shear, w in map_sets:
-            out.submit(result_arrays(g2.gg(shear, w)))
-
-## One-point statistics: `OnePoint`
-
-The distribution of an aperture field over the footprint -- the aperture-mass PDF of a shear
-map, the PDF of a smoothed convergence or density map, and their moments -- measured with the
-same aperture kernels, row space, weights and `aperture_nside` window as `Integrated3PCF`, and
-no pairs at all.
-
-```python
-from CosmoFuse import OnePoint, U_crittenden
-
-op = OnePoint(nside, mask, scales=(20.0, 45.0, 90.0), min_coverage=0.8,
-              edges=np.linspace(-0.03, 0.03, 61), device="gpu")
-res = op.g(shear, w, flip_g1=True)       # fields "M_ap", "M_x"; shear (nz, 2, npix | n_active)
-res.hist["M_ap"]                         # (nz, nscale, nbins) counts on half-open bins
-res.pdf("M_ap"), res.moments("M_ap")     # PDF; raw moments <x^k>, k = 1..5
-res.central_moments("M_ap")              # <(x - <x>)^k>, k = 2..5
-res.cross_moments("M_ap")["ij"]          # <x_i x_j> over res.cross_index["ij"]
-
-resk = op.k(kappa, w)                    # top hat of radius theta (default)
-OnePoint(nside, mask, scales, k_aperture_filter="healpix").k(kappa, w)      # pixel top hat
-OnePoint(nside, mask, scales, k_aperture_filter=U_crittenden).k(kappa, w)   # aperture mass of kappa
-```
-
-For every scale θ the centres are the pixels of `centre_nside` (default: the level whose pixel
-is closest to θ/2; `centre_nside=` sets it, one value or one per scale) whose aperture disc
-has a *coverage* -- the unmasked fraction of its map pixels, from the binary mask alone -- of
-at least `min_coverage`; `op.centres("g", i)` lists them. At each centre `g` measures
-$M_{\rm ap}$ and $M_\times$ (the $M_a$ kernel on the tangential and on the cross shear; the
-disc is `radius_factor` θ = 5 θ wide, `Q_crittenden` by default) and `k` the scalar field
-through a circular top hat of radius θ, the HEALPix pixel of the centre
-(`k_aperture_filter="healpix"`, the masked `ud_grade` of the map) or a compensated filter $U$
-on the 5 θ discs. The per-aperture values are *bitwise* `Integrated3PCF.m_a` / `m_g` with the
-centres as patches (`aperture_nside` and the moment-carrying aperture cells included).
-
-The result holds sums over the accepted apertures -- unit weight each, as in the DES Y3
-moments analysis -- so results of several devices or footprints add with `+`: `n_apertures`,
-`count` (apertures whose disc holds weight in every tomographic bin), `power_sums` Σ x^k, `cross_sums`
-Σ x_i x_j / Σ x_i² x_j / Σ x_i x_j x_k, and with `edges` (fixed up front from the simulations,
-per scale and bin if wanted) the histogram with its `underflow`/`overflow`. `values=True`
-keeps the raw `(nz, n_apertures)` arrays per scale, e.g. to design the edges or for quantile
-estimators. `device=[0, 1]` splits the centres of every scale across GPUs. κ from shear
-(mass mapping) is not part of the package: produce κ upstream and pass it to `k`.
-
-## Global (footprint-wide) estimators
-
-Both estimators find their pairs once (per HEALPix tile, `tile_nside`) and reuse them for every
-map, on CPU or GPU, with the same `preprocess` / `save_pairs` / `load_pairs` workflow as above.
-
-### Two-point: `Global2PCF`
-
-```python
-from CosmoFuse import Global2PCF
-
-g2 = Global2PCF(nside, mask=mask, nbins=20, theta_min=5, theta_max=250,
-                resolution_factor=None, cell_moments="quad",             # treecode + moment-carrying cells
-                pack_pairs=False, device="auto",                         # or device=[0, 1]
-                pack_host_pairs=False)              # True: 8-byte pairs in RAM and in the file
-g2.preprocess()                      # or g2.load_pairs("g2.h5") after g2.save_pairs(...)
-
-gg = g2.gg(shear_maps, w, flip_g1=True)              # TwoPointResult
-gg.xi_p, gg.xi_m                                      # (nz(nz+1)/2, nbins)
-gg.combinations, gg.theta                             # row labels, bin centres (arcmin)
-w_theta = g2.kk(delta_maps, w_cov).xi                 # KK field estimator (= LS with pixel randoms)
-gamma_t = g2.kg(delta_maps, shear_maps, w_lens, w_source).xi
-out = g2.three_by_two_pt(shear_maps, delta_maps, w_source, w_lens)   # {"gg", "kk", "kg"}
-
-gg.num["xi_p"], gg.weight                             # the sums themselves, (ncomb, nbins)
-```
-
-A `TwoPointResult` holds the sums Σ w_i w_j f_i f_j and Σ w_i w_j over the whole footprint; the
-estimate is their ratio, and results of different footprints or devices add with `+`. The
-estimator is the ratio of sums over every pixel pair of the footprint and agrees
-with TreeCorr's `GGCorrelation`, `KKCorrelation` (`k = δ`) and `KGCorrelation` on the pixel
-centres (`brute=True`, `metric="Arc"`) to TreeCorr's rounding.
-
-`pack_host_pairs=True` works as for `Integrated3PCF`: every tile is packed right after its pair
-search, so host RAM and the pair file hold 8 instead of 24 bytes per pair, and `prepare()` /
-`load_pairs()` have almost nothing left to do. The device state is bitwise the one
-`pack_pairs=True` builds from an exact file. For DES Y3 on seitz1 (A100, 160 cores):
-
-| nside | pairs | `find_pairs` | `prepare` (exact / packed) | `load_pairs` (exact / packed) | file (exact / packed) |
-|---|---|---|---|---|---|
-| 512, full resolution | 6.7 × 10⁸ | 27 s | 8.7 s / 1.2 s | 9.5 s / 3.3 s | 16.1 / 5.4 GB |
-| 2048, `resolution_factor=2.9` | 7.0 × 10⁷ | 31 s | 1.2 s / 0.4 s | 1.4 s / 0.7 s | 1.8 / 0.7 GB |
-
-Packing uses as many threads as Numba (`NUMBA_NUM_THREADS`).
-
-### Three-point: `Global3PCF`
-
-```python
-from CosmoFuse import Component, Global3PCF
-
-g3 = Global3PCF(nside, mask=mask, nbins=12, theta_min=15, theta_max=250, n_max=20,
-                device="auto")                        # or device=[0, 1]: centres split per GPU
-g3.preprocess()
-
-res = g3.ggg(shear_maps, w, flip_g1=True)            # ThreePointResult, labels gamma0..gamma3
-res.num["gamma0"].shape    # (2 n_max + 1, nz, nz, nz, nbins, nbins): n, z_centre, z_leg2, z_leg3, b2, b3
-gamma = res.binned(np.linspace(-np.pi, np.pi, 17))    # label -> (..., nbins, nbins, 16)
-
-zeta = g3.kkk(delta_maps, w)                          # scalar 3PCF
-kgg = g3.kgg(delta_maps, shear_maps, w_lens, w_source)  # <k g g>, <k g* g>
-kkg = g3.kkg(delta_maps, shear_maps, w_lens, w_source)  # <k k g>
-mixed = g3.measure(                                   # any spin-0 / spin-2 combination
-    {"k": (delta_maps, w_lens, 0), "g": (shear_maps, w_source, 2)},
-    [Component("gkk*", ("g", "k", "k"), (True, False, False))],
-)
-```
-
-A triangle is seen from its centre vertex with legs in radial bins `b2`, `b3` and opening angle
-`phi = phi_3 - phi_2`. The multipoles are exact for every `n`; only the conversion to
-opening-angle bins (`binned()`) truncates at `n_max`. Spin-2 values are in the x-projection:
-every vertex is projected along its leg to the centre (f̃ = −f e^{−2iβ}, `Re` = tangential),
-so a theory prediction is converted to that projection per triangle. Results are sums, so
-chunks and devices add with `+`. Full resolution only.
-
-## Calculating i3PCFs
-
-The 8 i3PCFs can be computed with `CosmoFuse.correlation_helpers`:
-
-```python
-from CosmoFuse.correlation_helpers import (
-    zeta_g_plus, zeta_g_minus, zeta_a_plus, zeta_a_minus,
-    zeta_g_g, zeta_a_g, zeta_g_t, zeta_a_t,
-)
-
-# Central fields (nmaps, nzbins, npatches)
-# M_g: galaxy-density-like center field
-# M_a: aperture-mass center field
-
-# Annulus fields (nmaps, n_correlations, npatches, nbins)
-# xi_p: xi_plus, xi_m: xi_minus, xi_g: galaxy auto-correlation, xi_t: tangential shear
-
-zg_plus = zeta_g_plus(M_g, xi_p)
-zg_minus = zeta_g_minus(M_g, xi_m)
-za_plus = zeta_a_plus(M_a, xi_p)
-za_minus = zeta_a_minus(M_a, xi_m)
-zg_g = zeta_g_g(M_g, xi_g)
-za_g = zeta_a_g(M_a, xi_g)
-zg_t = zeta_g_t(M_g, xi_t)
-za_t = zeta_a_t(M_a, xi_t)
-```
-
-### Mixed tomographies
-
-The source and lens samples need not share a binning: `M_a` over 4 source bins
-beside `M_g` over 5 lens bins is the ordinary 6x2pt case. An estimator whose
-centre and annulus come from one sample keeps the upper-triangle layout
-(`zeta_triplets`); one that crosses two samples returns a row per
-`(z_center, annulus_combination)`, centre-major (`zeta_cross_triplets`).
-
-The layout is inferred from the shapes, which is unambiguous except when the
-two samples happen to have the **same number of bins** — a cross annulus then
-holds exactly `nz(nz+1)/2` combinations and is read as the triangle, the
-historical behaviour. Say which you meant:
-
-```python
-za_g = zeta_a_g(M_a, xi_g, symmetric=False)   # 4 x 15 rows, not the triangle
-
-results = calculate_all_zetas(
-    M_g=M_g, M_a=M_a, xi_p=xi_p, xi_g=xi_g,
-    symmetric={"zeta_a_g": False, "zeta_g_plus": False},
-)
-```
-
-Unified helper:
-
-```python
-from CosmoFuse.correlation_helpers import calculate_all_zetas
-
-results = calculate_all_zetas(
-    M_g=M_g,
-    M_a=M_a,
-    xi_p=xi_p,
-    xi_m=xi_m,
-    xi_g=xi_g,
-    xi_t=xi_t,
-)
-```
+For GPUs, install [CuPy](https://docs.cupy.dev/en/stable/install.html) for
+your CUDA version in the same environment (`pip install cupy-cuda12x`, CUDA 12
+or newer); PixPoint picks the GPU automatically. Details, including the
+development install, in the
+[installation guide](https://pixpoint.readthedocs.io/en/latest/install.html).
+
+## Learn more
+
+- [Concepts](https://pixpoint.readthedocs.io/en/latest/concepts.html): maps
+  versus catalogues, weights and masks, what the estimators compute.
+- [Two-point functions](https://pixpoint.readthedocs.io/en/latest/global2pcf.html),
+  [three-point functions](https://pixpoint.readthedocs.io/en/latest/global3pcf.html),
+  [integrated 3PCF](https://pixpoint.readthedocs.io/en/latest/integrated3pcf.html),
+  [one-point statistics](https://pixpoint.readthedocs.io/en/latest/onepoint.html).
+- [Running on GPUs](https://pixpoint.readthedocs.io/en/latest/performance.html)
+  and [files and streaming](https://pixpoint.readthedocs.io/en/latest/io.html).
+- [Conventions](https://pixpoint.readthedocs.io/en/latest/conventions.html)
+  (shear signs, bin labels, the 3PCF projection) and the formal
+  [estimator definitions](https://pixpoint.readthedocs.io/en/latest/estimator_note.html).
+
+PixPoint was called CosmoFuse before version 8.0.0; `import CosmoFuse` is now
+`import pixpoint`, nothing else in the API changed, and old pair files are
+still read.
+
+## Citing
+
+Please cite the software (see `CITATION.cff` or GitHub's "Cite this
+repository") and the papers behind the estimators you use, listed on the
+[Citing](https://pixpoint.readthedocs.io/en/latest/citing.html) page.
+
+## Contributing
+
+Issues and pull requests are welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md). PixPoint is released under the
+[MIT licence](LICENSE).

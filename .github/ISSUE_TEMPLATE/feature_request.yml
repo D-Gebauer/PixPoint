@@ -1,0 +1,21 @@
+name: Feature request
+description: A statistic, option or workflow PixPoint should support.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to measure or do
+      description: Describe the measurement in the terms of your analysis (the statistic, the maps, the scales), not a proposed implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How you do it today
+      description: With another code, a workaround, or not at all.
+  - type: textarea
+    id: refs
+    attributes:
+      label: References
+      description: Papers defining the estimator, if any.

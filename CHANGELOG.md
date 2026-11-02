@@ -13,6 +13,18 @@ documentation to `pixpoint.readthedocs.io`. Pair files written by
 still read. The HDF5 writers store `pixpoint_version` instead of
 `cosmofuse_version`. Earlier entries of this changelog keep the old name.
 
+**Documentation.** A Sphinx site (`docs/`, Markdown via MyST, the furo
+theme) replaces the long README: getting started, concepts for cosmologists
+who have never touched a GPU, one guide per estimator with `Global2PCF`
+first, the treecode and its price, running on GPUs in plain terms, files
+and streaming, conventions (shear signs, bin labels, the 3PCF projection),
+the formal estimator note, an autodoc API reference, citing (references
+checked), and contributing. `make docs` builds it with warnings as errors,
+CI builds it on every push, `.readthedocs.yaml` publishes it. The repository
+gains CONTRIBUTING.md, a Contributor Covenant code of conduct, SECURITY.md,
+CITATION.cff, issue and pull-request templates; the README is rewritten
+around `Global2PCF`.
+
 **Breaking.** Stage A of the 8.0.0 plan (`RELEASE_8.0.0_GUIDE.md`): the
 estimators lose the two pieces of error estimation they had grown.
 CosmoFuse measures; covariances, jackknives and projections are the

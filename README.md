@@ -105,6 +105,7 @@ First create an Integrated3PCF object:
         accumulation_precision="float64",   # "same" / "float64"
         resolution_factor=None,             # None = full resolution; True (k=4) or a number k: static treecode
         cell_moments="quad",                # what a coarse cell carries: "quad", "dipole" or None (plain cells)
+        edge_slop=None,                     # None = static per-bin levels; 0.0 = edge-splitting search, exact binning
         aperture_nside=None,                # coarser nside for the aperture statistics (None = nside)
         memory_budget_gb=None,              # pair-memory budget of the preflight check (None = free device memory)
         pair_search_precision="float64",    # "float64" / "float32"
@@ -128,7 +129,13 @@ phases to second order in the children's offsets, which removes almost all of th
 suppression and its information loss (`"dipole"`: first order, cheaper, information fix
 only; `None`: the plain cells). The same cells correct the aperture statistics measured on a
 coarse `aperture_nside` level (tangential phase and the filter's variation across a cell).
-Nothing of this runs at full resolution.
+The static list has a second window the moments cannot touch: a cell pair is binned by its
+centroid separation, so child pairs near a bin edge land in the neighbouring bin (±2 % at
+k = 4, alternating at the level seams). `edge_slop=0.0` replaces the per-level search by a
+top-down split of cell pairs whose separation range crosses a bin edge, down to exactly binned
+pixel pairs (TreeCorr's `bin_slop`): Σ w_i w_j per bin then equals full resolution, at 5–15×
+the pairs of the static list at the same k -- a k ≈ 4 feature for smooth data vectors and theory
+comparison. Nothing of this runs at full resolution.
 
 ### Selecting patch centers from a mask
 
@@ -428,6 +435,7 @@ from CosmoFuse import Global2PCF
 
 g2 = Global2PCF(nside, mask=mask, nbins=20, theta_min=5, theta_max=250,
                 resolution_factor=None, cell_moments="quad",             # treecode + moment-carrying cells
+                edge_slop=None,                                          # 0.0: edge-splitting search (needs a treecode)
                 pack_pairs=False, device="auto",                         # or device=[0, 1]
                 pack_host_pairs=False)              # True: 8-byte pairs in RAM and in the file
 g2.preprocess()                      # or g2.load_pairs("g2.h5") after g2.save_pairs(...)

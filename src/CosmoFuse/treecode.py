@@ -16,7 +16,10 @@ their parent cells (their binary-mask centroids).
 
 Levels are assigned once, at preprocess time ("static"): the measurement
 kernels stay branch-free and the estimator is a fixed linear operator on the
-maps.
+maps.  With ``edge_slop`` (:mod:`CosmoFuse.edge_split`) the per-bin level is
+the *coarsest* level a bin may use: cell pairs whose separation range
+crosses a bin edge are split into their children, down to exactly binned
+pixel pairs, so one bin then holds pairs of several levels.
 
 Conventions
 -----------
@@ -75,6 +78,30 @@ def validate_resolution_factor(resolution_factor: object) -> Optional[float]:
             f"resolution_factor must be positive; got {resolution_factor!r}"
         )
     return k
+
+
+def validate_edge_slop(edge_slop: object) -> Optional[float]:
+    """Return the edge slop as a float (``None`` = the static per-bin levels).
+
+    ``None`` / ``False`` -> no edge splitting (the pairs of a bin are the cell
+    pairs of its level, binned by centroid separation); a number ``>= 0`` ->
+    the edge-splitting search of :mod:`CosmoFuse.edge_split` with that slop
+    (``0.0`` = exact binning).
+    """
+    if edge_slop is None or edge_slop is False:
+        return None
+    if isinstance(edge_slop, bool) or not isinstance(
+        edge_slop, (int, float, np.integer, np.floating)
+    ):
+        raise ValueError(
+            "edge_slop must be None (static per-bin levels) or a number >= 0 "
+            f"(the tolerated overhang of a cell pair beyond its bin's edges, in "
+            f"units of the bin width; 0 = exact binning); got {edge_slop!r}"
+        )
+    slop = float(edge_slop)
+    if not (slop >= 0.0) or np.isnan(slop) or np.isinf(slop):
+        raise ValueError(f"edge_slop must be finite and >= 0; got {edge_slop!r}")
+    return slop
 
 
 def assign_levels(
@@ -147,23 +174,112 @@ def disc_pair_fraction(theta_lo: float, theta_hi: float, radius: float) -> float
     return max(cdf(theta_hi) - cdf(theta_lo), 0.0)
 
 
+def model_cell_radius(nside_level: int, base_nside: int) -> float:
+    """Typical radius (radians) of a complete cell of ``nside_level`` built
+    from base pixels of ``base_nside``: the distance from the centroid to the
+    farthest member pixel *centre*, i.e. the half-diagonal of the cell minus
+    the half-diagonal of a base pixel, for a square of side ``nside2resol``
+    (zero for the base level; a 2 x 2 cell gives ``resol(base) / sqrt 2``).
+    The pair-count model of the edge split uses it; the search itself uses
+    the exact per-cell radii (:func:`cell_radii`)."""
+    if int(nside_level) >= int(base_nside):
+        return 0.0
+    return float(
+        (hp.nside2resol(int(nside_level)) - hp.nside2resol(int(base_nside)))
+        / np.sqrt(2.0)
+    )
+
+
+def _split_strips(
+    theta_lo: float,
+    theta_hi: float,
+    stages: Sequence[Tuple[float, float]],
+    slop: float,
+) -> List[Tuple[float, float, float]]:
+    """Separation intervals accepted at every stage of a bin under the edge
+    split.  ``stages``: ``(range, density)`` of the pair types the recursion
+    walks through, from the coarsest (cell pairs of the bin's static level)
+    to pixel pairs -- the range is ``s_a + s_b`` of the two ends' model
+    radii, the density the pair count relative to pixel pairs.  A pair of
+    range ``r`` is accepted when ``d +- r`` overhangs the bin by at most
+    ``slop`` of the bin width, i.e. for ``d`` in ``A = [theta_lo + r - slop
+    w, theta_hi - r + slop w]`` (within the bin); a stage gets ``A`` minus
+    what the previous (coarser) stage already took.  Returns ``(a, b,
+    density)`` intervals (empty ones dropped)."""
+    width = theta_hi - theta_lo
+    out: List[Tuple[float, float, float]] = []
+    prev: Optional[Tuple[float, float]] = None
+    for r, density in stages:
+        a = max(theta_lo, theta_lo + r - slop * width)
+        b = min(theta_hi, theta_hi - r + slop * width)
+        if b <= a:
+            continue
+        if prev is None:
+            out.append((a, b, density))
+        else:
+            if prev[0] > a:
+                out.append((a, prev[0], density))
+            if b > prev[1]:
+                out.append((prev[1], b, density))
+        prev = (a, b)
+    return out
+
+
+def split_stages(nside_level: int, base_nside: int) -> List[Tuple[float, float]]:
+    """The ladder of pair types the edge split walks from the cell pairs of
+    ``nside_level`` to pixel pairs -- ``(n, n), (n, 2n), (2n, 2n), (2n, 4n),
+    ...`` in nside (the larger cell is split first, so same-level pairs pass
+    through a mixed stage) -- as ``(range, density)`` for
+    :func:`_split_strips`: range ``s_a + s_b`` of the model radii, density
+    ``(n_a n_b / base^2)^2`` relative to pixel pairs."""
+    base = int(base_nside)
+    n = int(nside_level)
+    levels = []
+    while n < base:
+        levels.append(n)
+        n *= 2
+    levels.append(base)
+    stages: List[Tuple[float, float]] = []
+    for k, na in enumerate(levels):
+        for nb in (na, levels[k + 1]) if k + 1 < len(levels) else (na,):
+            r = model_cell_radius(na, base) + model_cell_radius(nb, base)
+            density = (float(na) * float(nb) / float(base) ** 2) ** 2
+            stages.append((r, density))
+    return stages
+
+
 def estimate_pairs_per_bin(
     n_pix_patch: np.ndarray,
     binedges: np.ndarray,
     level_nside: np.ndarray,
     base_nside: int,
     radius: float,
+    edge_slop: Optional[float] = None,
 ) -> np.ndarray:
     """Projected number of pairs per bin, summed over patches.
 
-    ``n_pix_patch``: unmasked base-resolution pixels per patch.
+    ``n_pix_patch``: unmasked base-resolution pixels per patch.  With
+    ``edge_slop`` the projection follows the edge split: every stage of the
+    ladder :func:`split_stages` (cell pairs of the bin's static level, then
+    mixed and finer pairs down to pixel pairs) contributes the pairs whose
+    centroid separation lies in the strips :func:`_split_strips` assigns to
+    it (the coarsest stage the interior of the bin, every finer stage two
+    strips next to the edges), with that stage's pair density.
     """
     n_pix_patch = np.asarray(n_pix_patch, dtype=np.float64)
+    n_pairs_pix = float(np.sum(0.5 * n_pix_patch * n_pix_patch))
     out = np.zeros(len(level_nside), dtype=np.float64)
     for b, ns in enumerate(level_nside):
-        n_cells = n_pix_patch * (float(ns) / float(base_nside)) ** 2
-        frac = disc_pair_fraction(float(binedges[b]), float(binedges[b + 1]), radius)
-        out[b] = float(np.sum(0.5 * n_cells * n_cells)) * frac
+        lo, hi = float(binedges[b]), float(binedges[b + 1])
+        if edge_slop is None or int(ns) >= int(base_nside):
+            density = (float(ns) / float(base_nside)) ** 4
+            out[b] = n_pairs_pix * density * disc_pair_fraction(lo, hi, radius)
+            continue
+        total = 0.0
+        stages = split_stages(int(ns), int(base_nside))
+        for a, bb, density in _split_strips(lo, hi, stages, float(edge_slop)):
+            total += n_pairs_pix * density * disc_pair_fraction(a, bb, radius)
+        out[b] = total
     return out
 
 
@@ -181,6 +297,27 @@ class PatchCells:
     # pixels; deeper levels -> patch-local cell index in the previous level.
     child_indptr: List[np.ndarray] = field(default_factory=list)
     child_indices: List[np.ndarray] = field(default_factory=list)
+    # per level: the largest angle between a cell's centroid and one of its
+    # member pixel centres (the edge split's range bound; 0 for a one-pixel cell)
+    radius: List[np.ndarray] = field(default_factory=list)
+
+
+def cell_radii(
+    centroid_xyz: np.ndarray, member_xyz: np.ndarray, cell_of_member: np.ndarray
+) -> np.ndarray:
+    """Radius of every cell: the largest angle (radians) between its centroid
+    ``centroid_xyz[c]`` ``(3, n_cells)`` and a member ``member_xyz[:, m]``
+    ``(3, n_members)`` with ``cell_of_member[m] == c``."""
+    n_cells = int(centroid_xyz.shape[1])
+    radius = np.zeros(n_cells, dtype=np.float64)
+    if cell_of_member.size == 0:
+        return radius
+    c = centroid_xyz[:, cell_of_member]
+    dot = np.einsum("ij,ij->j", c, member_xyz)
+    cross = np.cross(c, member_xyz, axis=0)
+    ang = np.arctan2(np.sqrt(np.einsum("ij,ij->j", cross, cross)), dot)
+    np.maximum.at(radius, cell_of_member, ang)
+    return radius
 
 
 def build_patch_cells(
@@ -221,6 +358,7 @@ def build_patch_cells(
         cells.n_cells.append(n_cells)
         cells.ra.append(np.asarray(phi, dtype=np.float64))
         cells.dec.append(np.pi / 2.0 - np.asarray(theta, dtype=np.float64))
+        cells.radius.append(cell_radii(cvec, vec, inv_fine))
 
         # children = elements of the previous level
         parent_of_prev = prev_ids >> (shift - prev_shift)
@@ -236,6 +374,22 @@ def build_patch_cells(
         prev_ids = cell_ids
         prev_shift = shift
     return cells
+
+
+def id_range_bounds(
+    npix: int, n_aperture_cells: int, treecode: Optional["TreecodeGeometry"]
+) -> Optional[np.ndarray]:
+    """Boundaries of the global-id ranges a pair list can mix -- the pixels
+    ``[0, npix)`` and every treecode level -- for the range-aware row blocks
+    of :func:`CosmoFuse.packing.block_local_indices`; ``None`` without a
+    treecode (one range)."""
+    if treecode is None or treecode.n_levels == 0:
+        return None
+    starts = treecode.level_starts(first=int(n_aperture_cells))
+    bounds = [int(npix)] + [
+        int(npix) + int(starts[level]) for level in range(1, treecode.n_levels)
+    ]
+    return np.asarray(bounds, dtype=np.int64)
 
 
 # ── global (all patches) treecode geometry ────────────────────────────────
@@ -256,6 +410,9 @@ class TreecodeGeometry:
     child_indices: List[np.ndarray]
     cell_ra: List[np.ndarray]
     cell_dec: List[np.ndarray]
+    # per level: the cell radii (:func:`cell_radii`); ``None`` for a geometry
+    # read from a file -- :meth:`radius` then computes them on demand
+    cell_radius: Optional[List[np.ndarray]] = None
 
     @property
     def n_levels(self) -> int:
@@ -324,6 +481,16 @@ class TreecodeGeometry:
                 if patches
                 else np.zeros(0)
             )
+        radii: Optional[List[np.ndarray]] = None
+        if all(len(p.radius) == n_levels for p in patches):
+            radii = [
+                (
+                    np.concatenate([p.radius[level] for p in patches])
+                    if patches
+                    else np.zeros(0)
+                )
+                for level in range(n_levels)
+            ]
         return cls(
             base_nside=int(base_nside),
             coarse_nsides=tuple(int(n) for n in coarse_nsides),
@@ -332,6 +499,7 @@ class TreecodeGeometry:
             child_indices=child_indices,
             cell_ra=cell_ra,
             cell_dec=cell_dec,
+            cell_radius=radii,
         )
 
     def slice_patches(self, start: int, stop: int) -> "TreecodeGeometry":
@@ -355,6 +523,16 @@ class TreecodeGeometry:
             child_indices.append(idx)
             cell_ra.append(self.cell_ra[level][a:b])
             cell_dec.append(self.cell_dec[level][a:b])
+        radii = None
+        if self.cell_radius is not None:
+            radii = [
+                self.cell_radius[level][
+                    int(self.cell_offsets[level, start]) : int(
+                        self.cell_offsets[level, stop]
+                    )
+                ]
+                for level in range(n_levels)
+            ]
         return TreecodeGeometry(
             base_nside=self.base_nside,
             coarse_nsides=self.coarse_nsides,
@@ -363,7 +541,33 @@ class TreecodeGeometry:
             child_indices=child_indices,
             cell_ra=cell_ra,
             cell_dec=cell_dec,
+            cell_radius=radii,
         )
+
+    def radius(self, level: int) -> np.ndarray:
+        """Radii of the cells of ``level`` (:func:`cell_radii`), from the
+        construction when available, else from :meth:`pixel_children`."""
+        if self.cell_radius is not None:
+            return np.asarray(self.cell_radius[level], dtype=np.float64)
+        cache: Dict[int, np.ndarray] = self.__dict__.setdefault("_radius_cache", {})
+        hit = cache.get(level)
+        if hit is not None:
+            return hit
+        indptr, indices = self.pixel_children(level)
+        n_cells = int(indptr.size - 1)
+        centroid = np.asarray(
+            hp.ang2vec(np.pi / 2.0 - self.cell_dec[level], self.cell_ra[level]),
+            dtype=np.float64,
+        ).reshape(n_cells, 3)
+        members = (
+            np.asarray(hp.pix2vec(self.base_nside, indices), dtype=np.float64)
+            if indices.size
+            else np.zeros((3, 0))
+        )
+        cell_of_member = np.repeat(np.arange(n_cells), np.diff(indptr))
+        out = cell_radii(np.ascontiguousarray(centroid.T), members, cell_of_member)
+        cache[level] = out
+        return out
 
     def pixel_children(self, level: int) -> Tuple[np.ndarray, np.ndarray]:
         """Direct CSR ``(indptr, indices)`` from the cells of ``level`` to

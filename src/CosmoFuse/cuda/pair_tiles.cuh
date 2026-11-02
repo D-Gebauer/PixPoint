@@ -583,17 +583,21 @@ struct PackedMomentPairs {
 
 /* Per-end moment contractions of one (cell, tomo bin): the transported
    monopole M and, with the pair's perpendicular / parallel unit vectors
-   (p, q), Dp, Dq, Qpp, Qqp.  Complex values as (re, im) pairs. */
+   (p, q), Dp, Dq, Qpp, Qqp.  Complex values as (re, im) pairs.  An end
+   that is a pixel (cell index < 0: the edge-splitting search puts pixel
+   ends into coarse bins) has no moments beyond M -- `has` is false and the
+   expansion reduces to the exact value of that end. */
 template<typename T, int MOM>
 struct EndMoments {
     T M_r, M_i, Dp_r, Dp_i, Dq_r, Dq_i, Qpp_r, Qpp_i, Qqp_r, Qqp_i;
 
     __device__ __forceinline__ void load(
-        const T* mom_cell, T m_r, T m_i, T px, T py, T qx, T qy)
+        const T* mom_cell, bool has, T m_r, T m_i, T px, T py, T qx, T qy)
     {
         M_r = m_r; M_i = m_i;
         Dp_r = Dp_i = Dq_r = Dq_i = (T)0;
         Qpp_r = Qpp_i = Qqp_r = Qqp_i = (T)0;
+        if (!has) return;
         if (MOM >= 1) {
             const T dx_r = mom_cell[2], dx_i = mom_cell[3];
             const T dy_r = mom_cell[4], dy_i = mom_cell[5];
@@ -680,6 +684,8 @@ __device__ __forceinline__ void tile_xipm_mom(
         pairs.load(tid, row_a, row_b, s_a, c_a, s_b, c_b, idd);
         const long long cell_a = pairs.cell(row_a);
         const long long cell_b = pairs.cell(row_b);
+        const bool has_a = cell_a >= 0, has_b = cell_b >= 0;
+        const long long ca = has_a ? cell_a : 0, cb = has_b ? cell_b : 0;
         /* e^{-2iS phi} = e^{2i phi} at both ends */
         const T ra_R = c_a * c_a - s_a * s_a, ra_I = -S * (T)2 * s_a * c_a;
         const T rb_R = c_b * c_b - s_b * s_b, rb_I = -S * (T)2 * s_b * c_b;
@@ -692,9 +698,9 @@ __device__ __forceinline__ void tile_xipm_mom(
         T w_a[NS], w_b[NS];
         for (int t = 0; t < NS; ++t) {
             const long long ia = row_a * NS + t, ib = row_b * NS + t;
-            ea[t].load(mom + (cell_a * NS + t) * (2 * NM), shear[2 * ia], shear[2 * ia + 1],
+            ea[t].load(mom + (ca * NS + t) * (2 * NM), has_a, shear[2 * ia], shear[2 * ia + 1],
                        pax, pay, qax, qay);
-            eb[t].load(mom + (cell_b * NS + t) * (2 * NM), shear[2 * ib], shear[2 * ib + 1],
+            eb[t].load(mom + (cb * NS + t) * (2 * NM), has_b, shear[2 * ib], shear[2 * ib + 1],
                        pbx, pby, qbx, qby);
             w_a[t] = weights[ia];
             w_b[t] = weights[ib];
@@ -770,6 +776,8 @@ __device__ __forceinline__ void tile_ds_mom(
         pairs.load(tid, row_a, row_b, s_a, c_a, s_b, c_b, idd);
         const long long cell_a = pairs.cell(row_a);
         const long long cell_b = pairs.cell(row_b);
+        const bool has_a = cell_a >= 0, has_b = cell_b >= 0;
+        const long long ca = has_a ? cell_a : 0, cb = has_b ? cell_b : 0;
         const T ra_R = c_a * c_a - s_a * s_a, ra_I = -S * (T)2 * s_a * c_a;
         const T rb_R = c_b * c_b - s_b * s_b, rb_I = -S * (T)2 * s_b * c_b;
         /* a as the I end (plain vectors) and as the J end (transported) */
@@ -783,18 +791,18 @@ __device__ __forceinline__ void tile_ds_mom(
         T dw_a[ND], dw_b[ND], sw_a[NS], sw_b[NS];
         for (int l = 0; l < ND; ++l) {
             const long long ia = row_a * ND + l, ib = row_b * ND + l;
-            la[l].load(mom_lens + (cell_a * ND + l) * (2 * NM), density[ia], (T)0,
+            la[l].load(mom_lens + (ca * ND + l) * (2 * NM), has_a, density[ia], (T)0,
                        paIx, paIy, qaIx, qaIy);
-            lb[l].load(mom_lens + (cell_b * ND + l) * (2 * NM), density[ib], (T)0,
+            lb[l].load(mom_lens + (cb * ND + l) * (2 * NM), has_b, density[ib], (T)0,
                        pbIx, pbIy, qbIx, qbIy);
             dw_a[l] = lens_w[ia];
             dw_b[l] = lens_w[ib];
         }
         for (int s = 0; s < NS; ++s) {
             const long long ia = row_a * NS + s, ib = row_b * NS + s;
-            sa[s].load(mom_src + (cell_a * NS + s) * (2 * NM), shear[2 * ia], shear[2 * ia + 1],
+            sa[s].load(mom_src + (ca * NS + s) * (2 * NM), has_a, shear[2 * ia], shear[2 * ia + 1],
                        paJx, paJy, qaJx, qaJy);
-            sb[s].load(mom_src + (cell_b * NS + s) * (2 * NM), shear[2 * ib], shear[2 * ib + 1],
+            sb[s].load(mom_src + (cb * NS + s) * (2 * NM), has_b, shear[2 * ib], shear[2 * ib + 1],
                        pbJx, pbJy, qbJx, qbJy);
             sw_a[s] = source_w[ia];
             sw_b[s] = source_w[ib];
@@ -862,6 +870,8 @@ __device__ __forceinline__ void tile_multi_mom(
         pairs.load(tid, row_a, row_b, s_a, c_a, s_b, c_b, idd);
         const long long cell_a = pairs.cell(row_a);
         const long long cell_b = pairs.cell(row_b);
+        const bool has_a = cell_a >= 0, has_b = cell_b >= 0;
+        const long long ca = has_a ? cell_a : 0, cb = has_b ? cell_b : 0;
         const T ra_R = c_a * c_a - s_a * s_a, ra_I = -S * (T)2 * s_a * c_a;
         const T rb_R = c_b * c_b - s_b * s_b, rb_I = -S * (T)2 * s_b * c_b;
         const T rab_R = ra_R * rb_R - ra_I * rb_I, rab_I = ra_R * rb_I + ra_I * rb_R;
@@ -877,11 +887,11 @@ __device__ __forceinline__ void tile_multi_mom(
         T w_a[NS], w_b[NS];
         for (int t = 0; t < NS; ++t) {
             const long long ia = row_a * NS + t, ib = row_b * NS + t;
-            const T* ma = mom_src + (cell_a * NS + t) * (2 * NM);
-            const T* mb = mom_src + (cell_b * NS + t) * (2 * NM);
-            sa_I[t].load(ma, shear[2 * ia], shear[2 * ia + 1], paIx, paIy, qaIx, qaIy);
-            sa_J[t].load(ma, shear[2 * ia], shear[2 * ia + 1], paJx, paJy, qaJx, qaJy);
-            sb_J[t].load(mb, shear[2 * ib], shear[2 * ib + 1], pbJx, pbJy, qbJx, qbJy);
+            const T* ma = mom_src + (ca * NS + t) * (2 * NM);
+            const T* mb = mom_src + (cb * NS + t) * (2 * NM);
+            sa_I[t].load(ma, has_a, shear[2 * ia], shear[2 * ia + 1], paIx, paIy, qaIx, qaIy);
+            sa_J[t].load(ma, has_a, shear[2 * ia], shear[2 * ia + 1], paJx, paJy, qaJx, qaJy);
+            sb_J[t].load(mb, has_b, shear[2 * ib], shear[2 * ib + 1], pbJx, pbJy, qbJx, qbJy);
             w_a[t] = shear_w[ia];
             w_b[t] = shear_w[ib];
         }
@@ -893,9 +903,9 @@ __device__ __forceinline__ void tile_multi_mom(
             d_b[l] = density[ib];
             dw_a[l] = density_w[ia];
             dw_b[l] = density_w[ib];
-            la[l].load(mom_lens + (cell_a * ND + l) * (2 * NM), d_a[l], (T)0,
+            la[l].load(mom_lens + (ca * ND + l) * (2 * NM), has_a, d_a[l], (T)0,
                        paIx, paIy, qaIx, qaIy);
-            lb[l].load(mom_lens + (cell_b * ND + l) * (2 * NM), d_b[l], (T)0,
+            lb[l].load(mom_lens + (cb * ND + l) * (2 * NM), has_b, d_b[l], (T)0,
                        pbIx, pbIy, qbIx, qbIy);
         }
 

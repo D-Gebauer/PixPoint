@@ -29,6 +29,7 @@ tiles and the devices' totals are added in device order, so the result equals
 that of one device up to the summation order of that final add.
 """
 
+import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -37,6 +38,7 @@ import healpy as hp
 import numpy as np
 
 from .correlations import Integrated3PCF
+from .edge_split import SplitNodes, split_tile_pairs, tile_reach_radius
 from .global_geometry import (
     LevelElements,
     TileSet,
@@ -53,7 +55,12 @@ from .multi_device import (
 )
 from .packing import pack_host_patch
 from .results import TwoPointResult
-from .treecode import TreecodeGeometry, build_patch_cells, level_groups
+from .treecode import (
+    TreecodeGeometry,
+    build_patch_cells,
+    id_range_bounds,
+    level_groups,
+)
 from .utils import pixel2RaDec
 
 FORMAT_KIND = "CosmoFuse.Global2PCF"
@@ -140,6 +147,16 @@ class Global2PCF:
             (``"quad"`` by default): what a coarse treecode cell carries, and
             with it the second-order phase correction of ξ− and γ_t in the
             coarse bins.  Inert at full resolution.
+        edge_slop: as for :class:`~CosmoFuse.correlations.Integrated3PCF`
+            (``None`` by default): the edge-splitting pair search over the
+            footprint's cells.  A tile owns the top-level cell pairs whose
+            lower id lies in it and the whole split tree below them, so the
+            tiles partition exactly the pairs a one-patch search finds.  Note
+            that the pixel pairs of the split reach every bin, so a packed
+            (tile, bin) row block holds the pixel rows of the tile's whole
+            halo: with ``pack_pairs=True`` that is more than 65536 rows at
+            nside >= 1024 for the default tiles; pass a larger
+            ``tile_nside`` (smaller tiles) or ``pack_pairs=False``.
     """
 
     def __init__(
@@ -160,6 +177,7 @@ class Global2PCF:
         fastmath: bool = True,
         pack_host_pairs: bool = False,
         cell_moments: Optional[str] = "quad",
+        edge_slop: Optional[float] = None,
     ) -> None:
         devices: List[Any] = (
             device_list(device) if isinstance(device, (list, tuple, set)) else [device]
@@ -195,6 +213,7 @@ class Global2PCF:
                 pair_search_precision=pair_search_precision,
                 pack_pairs=pack_pairs,
                 cell_moments=cell_moments,
+                edge_slop=edge_slop,
             )
             for dev in devices
         ]
@@ -351,16 +370,38 @@ class Global2PCF:
         groups = level_groups(e.level_nside)
         reach_cache: Dict[Tuple[int, float], np.ndarray] = {}
         bins: List[np.ndarray] = []
+        npix = hp.nside2npix(e.nside)
+        bounds = id_range_bounds(npix, e.n_aperture_cells, treecode)
+        search: Callable[
+            [int], Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        ]
+        if treecode is not None and e.edge_slop is not None:
+            nodes = SplitNodes.from_rows(
+                e.nside, e.map_inds, treecode, e.n_aperture_cells
+            )
+            top_level = elements[int(treecode.coarse_nsides[-1])]
+            reach_radius = tile_reach_radius(
+                nodes, float(e.binedges[-1]), self.tile_nside
+            )
+
+            def search(t: int) -> Tuple[Any, ...]:
+                return self._search_tile_split(
+                    t, nodes, top_level, reach_radius, reach_cache, npix
+                )
+
+        else:
+            frames_cache: Dict[int, Tuple[np.ndarray, int]] = {}
+
+            def search(t: int) -> Tuple[Any, ...]:
+                return self._search_tile(t, elements, groups, reach_cache, frames_cache)
+
         if not self.pack_host_pairs:
             pair_inds: List[np.ndarray] = []
             pair_exp2phi: List[np.ndarray] = []
             pair_phi: List[np.ndarray] = []
             pair_inv_d: List[np.ndarray] = []
-            frames_cache: Dict[int, Tuple[np.ndarray, int]] = {}
             for t in range(self.n_tiles):
-                inds_t, exp_t, bins_t, phi_t, inv_d_t = self._search_tile(
-                    t, elements, groups, reach_cache, frames_cache
-                )
+                inds_t, exp_t, bins_t, phi_t, inv_d_t = search(t)
                 pair_inds.append(inds_t)
                 pair_exp2phi.append(exp_t)
                 bins.append(bins_t)
@@ -379,16 +420,13 @@ class Global2PCF:
         moments = treecode is not None and e.cell_moments is not None
         b_c = e._first_coarse_bin()
         edges = np.asarray(e.binedges, dtype=np.float64)
-        frames_cache_p: Dict[int, Tuple[np.ndarray, int]] = {}
         jobs: List[
             "Future[Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]]"
         ] = []
         with ThreadPoolExecutor(max_workers=_PACK_WORKERS) as pool:
             try:
                 for t in range(self.n_tiles):
-                    inds_t, exp_t, bins_t, phi_t, inv_d_t = self._search_tile(
-                        t, elements, groups, reach_cache, frames_cache_p
-                    )
+                    inds_t, exp_t, bins_t, phi_t, inv_d_t = search(t)
                     bins.append(bins_t)
                     jobs.append(
                         pool.submit(
@@ -399,6 +437,7 @@ class Global2PCF:
                             groups,
                             e.index_dtype,
                             (phi_t, inv_d_t, b_c, edges) if moments else None,
+                            bounds,
                         )
                     )
                     del inds_t, exp_t, phi_t, inv_d_t
@@ -487,6 +526,45 @@ class Global2PCF:
             bins_t.astype(e.index_dtype),
             np.concatenate(phi_t, axis=1) if phi_t else np.zeros((2, 0), dtype=rot),
             np.concatenate(inv_d_t) if inv_d_t else np.zeros(0, dtype=rot),
+        )
+
+    def _search_tile_split(
+        self,
+        t: int,
+        nodes: SplitNodes,
+        top_level: LevelElements,
+        reach_radius: float,
+        reach_cache: Dict[Tuple[int, float], np.ndarray],
+        npix: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """The pairs tile ``t`` owns under the edge-splitting search
+        (:func:`CosmoFuse.edge_split.split_tile_pairs`): the split trees of
+        the coarsest-level pairs whose lower id is a cell of this tile."""
+        e, ts = self._engine, self.tiles
+        key = (t, float(reach_radius))
+        if key not in reach_cache:
+            reach_cache[key] = ts.reach(t, reach_radius, "float64")
+        core_ids, _ = top_level.core(t)
+        cand_ids, _ = top_level.of_tiles(reach_cache[key])
+        out = split_tile_pairs(
+            nodes,
+            core_ids,
+            cand_ids,
+            npix,
+            e.n_active,
+            e.binedges,
+            e.level_nside,
+            float(e.edge_slop),  # type: ignore[arg-type]
+            e._first_coarse_bin(),
+            e.cell_moments is not None,
+        )
+        rot = e.rotation_dtype
+        return (
+            out["ids"].astype(e.index_dtype, copy=False),
+            out["exp2phi"].astype(e.rotation_complex_dtype),
+            out["counts"].astype(e.index_dtype),
+            out["phi"].astype(rot),
+            out["inv_d"].astype(rot),
         )
 
     def _install(
@@ -608,6 +686,8 @@ class Global2PCF:
             fp.attrs["pair_search_precision"] = str(e.pair_search_precision)
             if e.resolution_factor is not None:
                 fp.attrs["resolution_factor"] = float(e.resolution_factor)
+            if e._treecode is not None and e.edge_slop is not None:
+                fp.attrs["edge_slop"] = float(e.edge_slop)
             fp.create_dataset("map_inds", data=np.asarray(e.map_inds, dtype=np.int64))
             fp.create_dataset("tile_ids", data=self.tiles.tile_ids)
             fp.create_dataset(
@@ -778,6 +858,25 @@ class Global2PCF:
                     f"from this estimator's {np.asarray(e.level_nside).tolist()} "
                     "(resolution_factor)"
                 )
+            file_slop = fp.attrs.get("edge_slop", None)
+            file_slop = None if file_slop is None else float(file_slop)
+            if "treecode" in fp:
+                if e.edge_slop is not None and file_slop != e.edge_slop:
+                    raise ValueError(
+                        f"{filepath} was found with edge_slop={file_slop} (None: "
+                        f"the static per-level search), this estimator asks for "
+                        f"edge_slop={e.edge_slop}"
+                    )
+                if e.edge_slop is None and file_slop is not None:
+                    warnings.warn(
+                        f"{filepath} was found with edge_slop={file_slop}; "
+                        "adopting it. Pass the same value to the constructor to "
+                        "silence this warning.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    for eng in self._engines:
+                        eng.edge_slop = file_slop
             offsets = fp["pair_offsets"][:]
             bins_arr = fp["bins"][:]
             n = self.n_tiles

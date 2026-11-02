@@ -389,7 +389,20 @@ information fix, offered because it is 1.6× instead of 2.2–2.9× the kernel c
   128 (expect 2× / 3× the mono pass at the same level) and the ζ-level price via
   `t10_zeta_level.py --aperture-nside` for mono, dipole and quad.
 
-## Stage C — edge-splitting pair search
+## Stage C — edge-splitting pair search — implemented 2026-11-02 (C5 A100 measurements pending)
+
+Decisions taken (see the CHANGELOG entry): C2.1 (a) Numba on the host, parallel, no
+fastmath, float64 always (float32 search precision refused with `edge_slop`); C2.2 the
+packed row blocks stay per (patch, level group) but mark the pixel / cell id ranges
+separately (`block_local_indices(..., bounds)`) and `level_table` keeps the coarsest level
+per bin plus `edge_slop`; C2.3 a tile owns a *top-level* cell pair by the lower id and the
+whole split tree below it (≡ one patch by construction); C2.4 the preflight model walks the
+stage ladder cell-cell → cell-child → … → pixel pairs (`treecode.split_stages`, 1–7 % per
+bin); C2.5 float slop, validated at 0, acceptance rule gated at 0.3; C2.6 pixel ends have no
+moments (`EndMoments::load(…, has)`, `_mom_at`). Open question 3: yes at nside ≥ 1024 for
+`Global2PCF` (the pixel block of every coarse bin spans the tile's halo) -- documented, the
+error message names `tile_nside` / `pack_pairs=False`; chunked row blocks are a follow-up.
+Both estimators take `edge_slop` (open question 5). Gates: `tests/test_edge_split.py`.
 
 ### C1. What ships
 

@@ -216,6 +216,7 @@ class MultiDeviceIntegrated3PCF:
             "pack_host_pairs",
             "cell_moments",
             "moment_order",
+            "edge_slop",
             "mask",
         }
     )

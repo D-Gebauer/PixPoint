@@ -19,7 +19,10 @@ derivation and the sign convention):
   unpacked geometry run the same arithmetic;
 * the plain tiles run over every bin first (the coarse bins' plain sums are
   a small fraction of the work), then these kernels overwrite the coarse
-  bins; ``mom_base[b] < 0`` marks a fine bin, which they skip.
+  bins; ``mom_base[b] < 0`` marks a fine bin, which they skip;
+* a pair end that is a pixel (``row < n_active``; the edge-splitting search
+  puts pixel pairs and pixel-cell pairs into coarse bins) has no moments:
+  its ``D`` and ``Q`` are zero and the expansion is exact in that end.
 """
 
 from typing import Any, Tuple
@@ -32,6 +35,16 @@ from .combinations import _MAX_TILED_ACCUMULATORS, _combination_layout
 from .raw import KernelFile, _has_raw_cuda_compiler, c_index, c_real
 
 _S = MOMENT_SIGN
+
+
+@njit(inline="always")
+def _mom_at(mom: np.ndarray, cell: int, z: int, k: int, part: int) -> float:
+    """``mom[cell, z, k, part]`` at float64, or 0 for a pixel end (``cell <
+    0``: the edge-splitting search puts pixel ends into coarse bins; a pixel
+    has no moments beyond its value)."""
+    if cell < 0:
+        return 0.0
+    return float(mom[cell, z, k, part])
 
 
 # ── Numba: cell moments of one level ──────────────────────────────────────
@@ -208,14 +221,14 @@ def _cpu_xipm_tomo_moments_kernel(
                     F_r = MI_r * MJ_r - MI_i * MJ_i
                     F_i = MI_r * MJ_i + MI_i * MJ_r
                     if order >= 1:
-                        dxI_r = np.float64(mom[ci_, za, 1, 0])
-                        dxI_i = np.float64(mom[ci_, za, 1, 1])
-                        dyI_r = np.float64(mom[ci_, za, 2, 0])
-                        dyI_i = np.float64(mom[ci_, za, 2, 1])
-                        dxJ_r = np.float64(mom[cj_, zb, 1, 0])
-                        dxJ_i = np.float64(mom[cj_, zb, 1, 1])
-                        dyJ_r = np.float64(mom[cj_, zb, 2, 0])
-                        dyJ_i = np.float64(mom[cj_, zb, 2, 1])
+                        dxI_r = _mom_at(mom, ci_, za, 1, 0)
+                        dxI_i = _mom_at(mom, ci_, za, 1, 1)
+                        dyI_r = _mom_at(mom, ci_, za, 2, 0)
+                        dyI_i = _mom_at(mom, ci_, za, 2, 1)
+                        dxJ_r = _mom_at(mom, cj_, zb, 1, 0)
+                        dxJ_i = _mom_at(mom, cj_, zb, 1, 1)
+                        dyJ_r = _mom_at(mom, cj_, zb, 2, 0)
+                        dyJ_i = _mom_at(mom, cj_, zb, 2, 1)
                         DpI_r = dxI_r * pIx + dyI_r * pIy
                         DpI_i = dxI_i * pIx + dyI_i * pIy
                         DqI_r = dxI_r * qIx + dyI_r * qIy
@@ -235,18 +248,18 @@ def _cpu_xipm_tomo_moments_kernel(
                         F_r += -A_i * f1
                         F_i += A_r * f1
                         if order >= 2:
-                            xxI_r = np.float64(mom[ci_, za, 3, 0])
-                            xxI_i = np.float64(mom[ci_, za, 3, 1])
-                            xyI_r = np.float64(mom[ci_, za, 4, 0])
-                            xyI_i = np.float64(mom[ci_, za, 4, 1])
-                            yyI_r = np.float64(mom[ci_, za, 5, 0])
-                            yyI_i = np.float64(mom[ci_, za, 5, 1])
-                            xxJ_r = np.float64(mom[cj_, zb, 3, 0])
-                            xxJ_i = np.float64(mom[cj_, zb, 3, 1])
-                            xyJ_r = np.float64(mom[cj_, zb, 4, 0])
-                            xyJ_i = np.float64(mom[cj_, zb, 4, 1])
-                            yyJ_r = np.float64(mom[cj_, zb, 5, 0])
-                            yyJ_i = np.float64(mom[cj_, zb, 5, 1])
+                            xxI_r = _mom_at(mom, ci_, za, 3, 0)
+                            xxI_i = _mom_at(mom, ci_, za, 3, 1)
+                            xyI_r = _mom_at(mom, ci_, za, 4, 0)
+                            xyI_i = _mom_at(mom, ci_, za, 4, 1)
+                            yyI_r = _mom_at(mom, ci_, za, 5, 0)
+                            yyI_i = _mom_at(mom, ci_, za, 5, 1)
+                            xxJ_r = _mom_at(mom, cj_, zb, 3, 0)
+                            xxJ_i = _mom_at(mom, cj_, zb, 3, 1)
+                            xyJ_r = _mom_at(mom, cj_, zb, 4, 0)
+                            xyJ_i = _mom_at(mom, cj_, zb, 4, 1)
+                            yyJ_r = _mom_at(mom, cj_, zb, 5, 0)
+                            yyJ_i = _mom_at(mom, cj_, zb, 5, 1)
                             QppI_r = (
                                 xxI_r * pIx * pIx
                                 + xyI_r * 2.0 * pIx * pIy
@@ -411,12 +424,12 @@ def _cpu_density_shear_tomo_moments_kernel(
                     F_r = MI * MJ_r
                     F_i = MI * MJ_i
                     if order >= 1:
-                        dxI = np.float64(mom_lens[cl_, zl, 1, 0])
-                        dyI = np.float64(mom_lens[cl_, zl, 2, 0])
-                        dxJ_r = np.float64(mom_src[cs_, zs, 1, 0])
-                        dxJ_i = np.float64(mom_src[cs_, zs, 1, 1])
-                        dyJ_r = np.float64(mom_src[cs_, zs, 2, 0])
-                        dyJ_i = np.float64(mom_src[cs_, zs, 2, 1])
+                        dxI = _mom_at(mom_lens, cl_, zl, 1, 0)
+                        dyI = _mom_at(mom_lens, cl_, zl, 2, 0)
+                        dxJ_r = _mom_at(mom_src, cs_, zs, 1, 0)
+                        dxJ_i = _mom_at(mom_src, cs_, zs, 1, 1)
+                        dyJ_r = _mom_at(mom_src, cs_, zs, 2, 0)
+                        dyJ_i = _mom_at(mom_src, cs_, zs, 2, 1)
                         DpI = dxI * pIx + dyI * pIy
                         DqI = dxI * qIx + dyI * qIy
                         DpJ_r = dxJ_r * pJx + dyJ_r * pJy
@@ -429,15 +442,15 @@ def _cpu_density_shear_tomo_moments_kernel(
                         F_r += -A_i * f1
                         F_i += A_r * f1
                         if order >= 2:
-                            xxI = np.float64(mom_lens[cl_, zl, 3, 0])
-                            xyI = np.float64(mom_lens[cl_, zl, 4, 0])
-                            yyI = np.float64(mom_lens[cl_, zl, 5, 0])
-                            xxJ_r = np.float64(mom_src[cs_, zs, 3, 0])
-                            xxJ_i = np.float64(mom_src[cs_, zs, 3, 1])
-                            xyJ_r = np.float64(mom_src[cs_, zs, 4, 0])
-                            xyJ_i = np.float64(mom_src[cs_, zs, 4, 1])
-                            yyJ_r = np.float64(mom_src[cs_, zs, 5, 0])
-                            yyJ_i = np.float64(mom_src[cs_, zs, 5, 1])
+                            xxI = _mom_at(mom_lens, cl_, zl, 3, 0)
+                            xyI = _mom_at(mom_lens, cl_, zl, 4, 0)
+                            yyI = _mom_at(mom_lens, cl_, zl, 5, 0)
+                            xxJ_r = _mom_at(mom_src, cs_, zs, 3, 0)
+                            xxJ_i = _mom_at(mom_src, cs_, zs, 3, 1)
+                            xyJ_r = _mom_at(mom_src, cs_, zs, 4, 0)
+                            xyJ_i = _mom_at(mom_src, cs_, zs, 4, 1)
+                            yyJ_r = _mom_at(mom_src, cs_, zs, 5, 0)
+                            yyJ_i = _mom_at(mom_src, cs_, zs, 5, 1)
                             QppI = (
                                 xxI * pIx * pIx
                                 + xyI * 2.0 * pIx * pIy

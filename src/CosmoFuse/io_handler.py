@@ -41,7 +41,11 @@ class PairIOHandler:
     separation ``pair_inv_d`` of the coarse-level pairs (a contiguous tail
     of every patch's pair list; ``coarse_pair_offsets`` per patch) and the
     ``cell_moments`` attribute.  A reader asked for moments refuses a file
-    without them instead of guessing.
+    without them instead of guessing.  A treecode file found with the
+    edge-splitting search records ``edge_slop`` (an attribute, no new
+    version: the pair list is self-describing -- bins hold pairs of several
+    levels -- and a reader that asks for a different ``edge_slop`` refuses
+    it like a different ``resolution_factor``).
     """
 
     FORMAT_VERSION = 5
@@ -122,6 +126,9 @@ class PairIOHandler:
             # Provenance of the estimator (ignored by old readers).
             if owner.resolution_factor is not None:
                 fp.attrs["resolution_factor"] = float(owner.resolution_factor)
+            edge_slop = getattr(owner, "edge_slop", None)
+            if treecode is not None and edge_slop is not None:
+                fp.attrs["edge_slop"] = float(edge_slop)
             if moments:
                 fp.attrs["cell_moments"] = str(owner.cell_moments)
             fp.attrs["aperture_nside"] = int(owner.aperture_nside or owner.nside)
@@ -366,7 +373,12 @@ class PairIOHandler:
         else:
             file_levels = assign_levels(owner.binedges, owner.nside, None)
 
+        file_slop = fp.attrs.get("edge_slop", None)
+        file_slop = None if file_slop is None else float(file_slop)
+        has_coarse = bool(np.any(file_levels != int(owner.nside)))
+
         asked_k, asked_ap = owner.resolution_factor, owner.aperture_nside
+        asked_slop = getattr(owner, "edge_slop", None)
         asked_levels = assign_levels(owner.binedges, owner.nside, asked_k)
         if asked_k is not None and not np.array_equal(asked_levels, file_levels):
             raise ValueError(
@@ -381,19 +393,34 @@ class PairIOHandler:
                 f"{file_ap or int(owner.nside)}, but this Integrated3PCF asks for "
                 f"aperture_nside={asked_ap}."
             )
-        if (asked_k is None and file_k is not None) or (
-            asked_ap is None and file_ap is not None
+        # the split only exists with coarse levels; a full-resolution file is
+        # the same estimator whatever edge_slop the instance carries
+        if asked_slop is not None and has_coarse and file_slop != asked_slop:
+            raise ValueError(
+                f"{filepath} was built with edge_slop={file_slop} (None: the "
+                f"static per-level pair search), but this Integrated3PCF asks "
+                f"for edge_slop={asked_slop}. The pair list defines the "
+                "estimator: recompute the pairs, or construct with the file's "
+                "edge_slop."
+            )
+        if (
+            (asked_k is None and file_k is not None)
+            or (asked_ap is None and file_ap is not None)
+            or (asked_slop is None and file_slop is not None)
         ):
             warnings.warn(
                 f"{filepath} defines a static-treecode estimator "
-                f"(resolution_factor={file_k}, aperture_nside="
-                f"{file_ap or int(owner.nside)}); adopting it. Pass the same "
-                "values to the constructor to silence this warning.",
+                f"(resolution_factor={file_k}, edge_slop={file_slop}, "
+                f"aperture_nside={file_ap or int(owner.nside)}); adopting it. "
+                "Pass the same values to the constructor to silence this "
+                "warning.",
                 UserWarning,
                 stacklevel=3,
             )
         owner.resolution_factor = file_k
         owner.aperture_nside = file_ap
+        if has_coarse:
+            owner.edge_slop = file_slop
         owner.level_nside = file_levels
         owner._treecode = None
         # bins / resolution may have changed: keep the pair finder in sync

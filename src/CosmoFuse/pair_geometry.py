@@ -34,6 +34,7 @@ import numpy as np
 from tqdm import trange
 
 from .correlation_helpers import Q_crittenden, filter_derivatives
+from .edge_split import split_patch_pairs
 from .moments import cell_frames, pair_angles, unit_vectors
 from .packing import PACKED_BYTES_PER_PAIR, map_patches, pack_host_patch
 from .treecode import (
@@ -503,9 +504,11 @@ class PairGeometry:
             packed = bool(getattr(owner, "pack_host_pairs", False))
         bytes_per_pair = PACKED_BYTES_PER_PAIR if packed else exact_bytes_per_pair
 
+        slop = getattr(owner, "edge_slop", None)
+
         def projected_gb(level_nside: np.ndarray) -> float:
             pairs = estimate_pairs_per_bin(
-                n_pix, owner.binedges, level_nside, owner.nside, radius
+                n_pix, owner.binedges, level_nside, owner.nside, radius, slop
             )
             return float(pairs.sum() * bytes_per_pair / 1e9)
 
@@ -541,6 +544,7 @@ class PairGeometry:
             "full resolution"
             if owner.resolution_factor is None
             else f"resolution_factor={owner.resolution_factor:g}"
+            + ("" if slop is None else f", edge_slop={slop:g}")
         )
         raise MemoryError(
             f"Projected pair geometry for {owner.n_patches} patches at nside "
@@ -552,10 +556,105 @@ class PairGeometry:
         )
 
     @staticmethod
+    def patch_pixels(owner: "Integrated3PCF", i: int) -> np.ndarray:
+        """Unmasked RING pixels of the disc of patch ``i``."""
+        vec = hp.ang2vec(owner.theta_center[i], owner.phi_center[i])
+        patch_inds = hp.query_disc(
+            owner.nside, vec=vec, radius=np.radians(owner.patch_size / 60)
+        )
+        return cast(np.ndarray, patch_inds[owner.map_mask[patch_inds]])
+
+    @staticmethod
+    def find_pairs_split(owner: "Integrated3PCF", coarse: Tuple[int, ...]) -> None:
+        """The edge-splitting pair search (``edge_slop``) of every patch
+        (:func:`CosmoFuse.edge_split.split_patch_pairs`).
+
+        The cells of all patches are built first, so that the search can
+        write global virtual-row ids straight away (a bin then mixes cells
+        of several levels, which the per-level shift of :meth:`find_pairs`
+        cannot renumber afterwards).
+        """
+        want_moments = getattr(owner, "cell_moments", None) is not None
+        slop = float(owner.edge_slop)  # type: ignore[arg-type]
+        npix = hp.nside2npix(owner.nside)
+        pixels = [PairGeometry.patch_pixels(owner, i) for i in range(owner.n_patches)]
+        patch_cells = [build_patch_cells(owner.nside, pix, coarse) for pix in pixels]
+        treecode = TreecodeGeometry.from_patches(owner.nside, coarse, patch_cells)
+        if (
+            npix + owner.n_aperture_cells + treecode.n_cells
+            > np.iinfo(owner.index_dtype).max
+        ):
+            raise OverflowError("pixel + coarse-cell ids exceed the index dtype range")
+        starts = treecode.level_starts(first=owner.n_aperture_cells)
+        b_c = owner._first_coarse_bin()
+        pair_inds: List[Any] = []
+        pair_exp2phi: List[Any] = []
+        pair_phi: List[np.ndarray] = []
+        pair_inv_d: List[np.ndarray] = []
+        bins: List[np.ndarray] = []
+        for i in trange(
+            owner.n_patches, desc="2PCF pairs (edge split)", unit=" patches"
+        ):
+            gid_start = [
+                npix + int(starts[level]) + int(treecode.cell_offsets[level, i])
+                for level in range(len(coarse))
+            ]
+            out = split_patch_pairs(
+                owner.nside,
+                pixels[i],
+                patch_cells[i],
+                coarse,
+                gid_start,
+                owner.binedges,
+                owner.level_nside,
+                slop,
+                b_c,
+                want_moments,
+            )
+            pair_inds.append(out["ids"].astype(owner.index_dtype, copy=False))
+            pair_exp2phi.append(out["exp2phi"].astype(owner.rotation_complex_dtype))
+            bins.append(out["counts"].astype(owner.index_dtype))
+            if want_moments:
+                pair_phi.append(out["phi"].astype(owner.rotation_dtype))
+                pair_inv_d.append(out["inv_d"].astype(owner.rotation_dtype))
+        PairGeometry._install_pairs(
+            owner, pair_inds, pair_exp2phi, pair_phi, pair_inv_d, bins, treecode
+        )
+
+    @staticmethod
+    def _install_pairs(
+        owner: "Integrated3PCF",
+        pair_inds: List[Any],
+        pair_exp2phi: List[Any],
+        pair_phi: List[np.ndarray],
+        pair_inv_d: List[np.ndarray],
+        bins: List[np.ndarray],
+        treecode: Optional[TreecodeGeometry],
+    ) -> None:
+        """Publish freshly found pairs on the owner (host packing if asked)."""
+        want_moments = treecode is not None and bool(pair_phi)
+        owner.pair_inds = pair_inds
+        owner.pair_exp2phi = pair_exp2phi
+        owner.pair_phi = pair_phi if want_moments else None
+        owner.pair_inv_d = pair_inv_d if want_moments else None
+        owner.bins = bins
+        owner._treecode = treecode
+        owner.packed_pairs = None
+        owner.packed_block_ids = None
+        owner.packed_block_sizes = None
+        owner.packed_inv_d = None
+        if getattr(owner, "pack_host_pairs", False):
+            PairGeometry.pack_host_pairs(owner)
+        owner._invalidate_prepared_state()
+
+    @staticmethod
     def find_pairs(owner: "Integrated3PCF") -> None:
         PairGeometry.preflight_pair_memory(owner)
 
         coarse = PairGeometry.coarse_nsides(owner)
+        if coarse and getattr(owner, "edge_slop", None) is not None:
+            PairGeometry.find_pairs_split(owner, coarse)
+            return
         want_moments = bool(coarse) and getattr(owner, "cell_moments", None) is not None
         pair_inds: List[Any] = []
         pair_exp2phi: List[Any] = []
@@ -605,19 +704,15 @@ class PairGeometry:
                             :, edges[b0] : edges[b1]
                         ] += owner.index_dtype.type(shift)
 
-        owner.pair_inds = pair_inds
-        owner.pair_exp2phi = pair_exp2phi
-        owner.pair_phi = pair_phi if want_moments else None
-        owner.pair_inv_d = pair_inv_d if want_moments else None
-        owner.bins = bins
-        owner._treecode = treecode
-        owner.packed_pairs = None
-        owner.packed_block_ids = None
-        owner.packed_block_sizes = None
-        owner.packed_inv_d = None
-        if getattr(owner, "pack_host_pairs", False):
-            PairGeometry.pack_host_pairs(owner)
-        owner._invalidate_prepared_state()
+        PairGeometry._install_pairs(
+            owner,
+            pair_inds,
+            pair_exp2phi,
+            pair_phi if want_moments else [],
+            pair_inv_d if want_moments else [],
+            bins,
+            treecode,
+        )
 
     @staticmethod
     def pack_host_pairs(owner: "Integrated3PCF") -> None:
@@ -640,6 +735,7 @@ class PairGeometry:
         moments = pair_phi is not None and pair_inv_d is not None
         b_c = owner._first_coarse_bin()
         edges = np.asarray(owner.binedges, dtype=np.float64)
+        bounds = owner._id_range_bounds()
 
         def pack_one(
             i: int,
@@ -655,6 +751,7 @@ class PairGeometry:
                 groups,
                 owner.index_dtype,
                 moments=mom,
+                bounds=bounds,
             )
             # free the exact arrays of this patch as soon as it is packed
             pair_inds[i] = None

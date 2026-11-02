@@ -38,6 +38,14 @@ class ComputeContext:
     degrade_ops: Any
     degrade_csr: Any
     frozen_map_memo: Any
+    moment_phi_dev: Any
+    moment_inv_d_dev: Any
+    moment_base_dev: Any
+    moment_d_codes_dev: Any
+    moment_d_lo_dev: Any
+    moment_d_scale_dev: Any
+    packed_cell_of_row_dev: Any
+    moment_geometry: Any
     _xipm_sumofweights_cache: Any
     _xipm_sumofweights_cache_w_fingerprint: Any
     _xipm_sumofweights_cache_prepare_version: Any
@@ -86,6 +94,18 @@ class ComputeContext:
         ("degrade_csr", None),
         # Row-space device copies of read-only (frozen) host map inputs
         ("frozen_map_memo", None),
+        # Moment-carrying cells (cell_moments): the coarse pairs' angles and
+        # inverse separations (unpacked), their packed separation codes with
+        # the per-bin decoding, the per-bin offset into them (-1 = fine bin),
+        # the packed row -> cell map, and the per-level moment CSR + frames
+        ("moment_phi_dev", None),
+        ("moment_inv_d_dev", None),
+        ("moment_base_dev", None),
+        ("moment_d_codes_dev", None),
+        ("moment_d_lo_dev", None),
+        ("moment_d_scale_dev", None),
+        ("packed_cell_of_row_dev", None),
+        ("moment_geometry", None),
     )
     # Cached weight sums Σw_i·w_j used to normalise ξ and γ_t estimators;
     # invalidated when weights change or pairs are re-prepared

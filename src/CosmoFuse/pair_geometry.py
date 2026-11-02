@@ -33,7 +33,8 @@ import healpy as hp
 import numpy as np
 from tqdm import trange
 
-from .correlation_helpers import Q_crittenden
+from .correlation_helpers import Q_crittenden, filter_derivatives
+from .moments import cell_frames, pair_angles, unit_vectors
 from .packing import PACKED_BYTES_PER_PAIR, map_patches, pack_host_patch
 from .treecode import (
     PatchCells,
@@ -227,6 +228,65 @@ class PairGeometry:
         return values
 
     @staticmethod
+    def aperture_moment_geometry(
+        owner: "Integrated3PCF", aperture_filter: Callable[..., Any]
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Per disc cell of a coarse aperture level: the position angle
+        ``psi`` of the centre seen from the cell (east -> north, the pair
+        finder's convention; the stored bearing is ``pi - psi``), ``1 /
+        theta`` and the filter's first and second derivative at ``theta``
+        (``correlation_helpers.filter_derivatives``) -- what the moment
+        kernels need on top of the plain geometry.  Rotation precision,
+        aligned with ``Q_inds_flat``; cached per geometry and filter."""
+        assert owner.aperture_nside is not None
+        if owner.Q_inds_flat is None:
+            if owner.Q_inds:
+                owner._prepare_aperture_flat()
+            else:
+                owner.find_aperture_pairs()
+        rot = owner.rotation_dtype
+        if owner.Q_inds_flat is None:  # no patches
+            empty = np.zeros(0, dtype=rot)
+            return empty, empty, empty, empty
+        key = PairGeometry.aperture_filter_key(aperture_filter)
+        ctx = owner.compute_context
+        cache = ctx.__dict__.setdefault("aperture_moment_cache", {})
+        hit = cache.get(key)
+        if hit is not None and hit[0] is owner.Q_inds_flat:
+            return cast(Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], hit[2])
+        ap_cells = owner._aperture_cells()
+        assert ap_cells is not None
+        nside_q = int(owner.aperture_nside)
+        q_inds = np.asarray(owner.Q_inds_flat, dtype=np.int64)
+        offsets = np.asarray(owner.Q_offsets, dtype=np.int64)
+        n_patches = offsets.size - 1
+        counts = np.diff(offsets)
+        pix = ap_cells[0][q_inds - hp.nside2npix(owner.nside)]
+        geom = cell_frames(*pixel2RaDec(pix, nside_q))
+        theta_c = np.asarray(owner.theta_center[:n_patches], dtype=np.float64)
+        phi_c = np.asarray(owner.phi_center[:n_patches], dtype=np.float64)
+        centre_pix = hp.ang2pix(nside_q, theta_c, phi_c)
+        ra_c, dec_c = pixel2RaDec(centre_pix, nside_q)
+        xc = np.repeat(unit_vectors(ra_c, dec_c), counts, axis=0)
+        psi = np.arctan2(
+            np.einsum("ij,ij->i", geom[:, 6:9], xc),
+            np.einsum("ij,ij->i", geom[:, 3:6], xc),
+        )
+        cos_t = np.clip(np.einsum("ij,ij->i", geom[:, 0:3], xc), -1.0, 1.0)
+        theta = np.arccos(cos_t)
+        with np.errstate(divide="ignore"):
+            inv_theta = np.where(theta > 0, 1.0 / np.where(theta > 0, theta, 1.0), 0.0)
+        dval, ddval = filter_derivatives(aperture_filter, theta, owner.theta_Q)
+        out = (
+            psi.astype(rot),
+            inv_theta.astype(rot),
+            np.asarray(dval, dtype=rot),
+            np.asarray(ddval, dtype=rot),
+        )
+        cache[key] = (owner.Q_inds_flat, aperture_filter, out)
+        return out
+
+    @staticmethod
     def _evaluate_k_aperture_filter(
         owner: "Integrated3PCF", filter_fn: Callable[..., Any]
     ) -> np.ndarray:
@@ -305,13 +365,19 @@ class PairGeometry:
     def get_pairs_helper_levels(
         owner: "Integrated3PCF",
         i: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, PatchCells]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, PatchCells, np.ndarray, np.ndarray]:
         """Static-treecode pair search for patch ``i``.
 
         Every resolution level is searched only in the (contiguous) bin
         range it owns.  Coarse pair indices are returned as ``npix +
         patch-local cell index``; :meth:`find_pairs` shifts them
         to global virtual-row ids once all patches are known.
+
+        The last two arrays are the moment geometry of the coarse-level
+        pairs (a contiguous tail of the pair list, since the levels get
+        coarser with the bin): the full position angles at both ends
+        ``(2, n_coarse)`` and the inverse separation ``(n_coarse,)``, at the
+        rotation precision.  Empty when ``cell_moments`` is off.
         """
         vec = hp.ang2vec(owner.theta_center[i], owner.phi_center[i])
         patch_inds = hp.query_disc(
@@ -323,7 +389,10 @@ class PairGeometry:
 
         npix = hp.nside2npix(owner.nside)
         owner._pair_finder.kernel = owner._compute_pairs_kernel
+        want_moments = getattr(owner, "cell_moments", None) is not None
         all_inds, all_exp, all_ninds = [], [], []
+        all_phi: List[np.ndarray] = []
+        all_inv_d: List[np.ndarray] = []
         for nside_b, b0, b1 in level_groups(owner.level_nside):
             if nside_b == owner.nside:
                 ids = pix_inds
@@ -337,12 +406,19 @@ class PairGeometry:
             inds, exp2theta, ninds = owner._pair_finder.get_pairs_patch_flat(
                 ids, ra, dec, binedges=owner.binedges[b0 : b1 + 1]
             )
+            if shift and want_moments:
+                phi, inv_d = PairGeometry.coarse_pair_geometry(
+                    owner, ra, dec, inds[0], inds[1]
+                )
+                all_phi.append(phi)
+                all_inv_d.append(inv_d)
             if shift:
                 inds = inds + owner.index_dtype.type(shift)
             all_inds.append(inds)
             all_exp.append(exp2theta)
             all_ninds.append(ninds)
 
+        rot = owner.rotation_dtype
         return (
             np.concatenate(all_inds, axis=1).astype(owner.index_dtype, copy=False),
             np.concatenate(all_exp, axis=1).astype(
@@ -350,6 +426,33 @@ class PairGeometry:
             ),
             np.concatenate(all_ninds).astype(owner.index_dtype, copy=False),
             cells,
+            (
+                np.concatenate(all_phi, axis=1)
+                if all_phi
+                else np.zeros((2, 0), dtype=rot)
+            ),
+            np.concatenate(all_inv_d) if all_inv_d else np.zeros(0, dtype=rot),
+        )
+
+    @staticmethod
+    def coarse_pair_geometry(
+        owner: "Integrated3PCF",
+        ra: np.ndarray,
+        dec: np.ndarray,
+        ids_a: np.ndarray,
+        ids_b: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Full position angles ``(2, n)`` and inverse separation ``(n,)`` of
+        the element pairs ``(ids_a, ids_b)`` of one level, from the elements'
+        positions, at the rotation precision (``moments.pair_angles``)."""
+        geom = cell_frames(ra, dec)
+        a = np.asarray(ids_a, dtype=np.int64)
+        b = np.asarray(ids_b, dtype=np.int64)
+        phi_a, phi_b, inv_d = pair_angles(geom[a], geom[b])
+        rot = owner.rotation_dtype
+        return (
+            np.stack((phi_a, phi_b)).astype(rot, copy=False),
+            inv_d.astype(rot, copy=False),
         )
 
     @staticmethod
@@ -453,8 +556,11 @@ class PairGeometry:
         PairGeometry.preflight_pair_memory(owner)
 
         coarse = PairGeometry.coarse_nsides(owner)
+        want_moments = bool(coarse) and getattr(owner, "cell_moments", None) is not None
         pair_inds: List[Any] = []
         pair_exp2phi: List[Any] = []
+        pair_phi: List[np.ndarray] = []
+        pair_inv_d: List[np.ndarray] = []
         bins: List[np.ndarray] = []
         patch_cells: List[PatchCells] = []
         for i in trange(owner.n_patches, desc="2PCF pairs", unit=" patches"):
@@ -462,6 +568,9 @@ class PairGeometry:
             if coarse:
                 result = PairGeometry.get_pairs_helper_levels(owner, i)
                 patch_cells.append(result[3])
+                if want_moments:
+                    pair_phi.append(result[4])
+                    pair_inv_d.append(result[5])
             else:
                 # Full resolution: the single-level search, unchanged.
                 result = PairGeometry.get_pairs_helper(owner, i)
@@ -498,11 +607,14 @@ class PairGeometry:
 
         owner.pair_inds = pair_inds
         owner.pair_exp2phi = pair_exp2phi
+        owner.pair_phi = pair_phi if want_moments else None
+        owner.pair_inv_d = pair_inv_d if want_moments else None
         owner.bins = bins
         owner._treecode = treecode
         owner.packed_pairs = None
         owner.packed_block_ids = None
         owner.packed_block_sizes = None
+        owner.packed_inv_d = None
         if getattr(owner, "pack_host_pairs", False):
             PairGeometry.pack_host_pairs(owner)
         owner._invalidate_prepared_state()
@@ -524,26 +636,44 @@ class PairGeometry:
         assert owner.pair_inds is not None and owner.pair_exp2phi is not None
         assert owner.bins is not None
         pair_inds, pair_exp2phi, bins = owner.pair_inds, owner.pair_exp2phi, owner.bins
+        pair_phi, pair_inv_d = owner.pair_phi, owner.pair_inv_d
+        moments = pair_phi is not None and pair_inv_d is not None
+        b_c = owner._first_coarse_bin()
+        edges = np.asarray(owner.binedges, dtype=np.float64)
 
-        def pack_one(i: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def pack_one(
+            i: int,
+        ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+            mom = None
+            if moments:
+                assert pair_phi is not None and pair_inv_d is not None
+                mom = (pair_phi[i], pair_inv_d[i], b_c, edges)
             out = pack_host_patch(
                 pair_inds[i],
                 pair_exp2phi[i],
                 bins[i],
                 groups,
                 owner.index_dtype,
+                moments=mom,
             )
             # free the exact arrays of this patch as soon as it is packed
             pair_inds[i] = None
             pair_exp2phi[i] = None
+            if moments:
+                assert pair_phi is not None and pair_inv_d is not None
+                pair_phi[i] = None
+                pair_inv_d[i] = None
             return out
 
         out = map_patches(pack_one, owner.n_patches)
         owner.packed_pairs = [o[0] for o in out]
         owner.packed_block_ids = [o[1] for o in out]
         owner.packed_block_sizes = [o[2] for o in out]
+        owner.packed_inv_d = [cast(np.ndarray, o[3]) for o in out] if moments else None
         owner.pair_inds = None
         owner.pair_exp2phi = None
+        owner.pair_phi = None
+        owner.pair_inv_d = None
 
     @staticmethod
     def get_pairs_patch_M_a(

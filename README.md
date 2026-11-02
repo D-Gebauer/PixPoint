@@ -104,6 +104,7 @@ First create an Integrated3PCF object:
         rotation_precision="float32",       # float32 / float64
         accumulation_precision="float64",   # "same" / "float64"
         resolution_factor=None,             # None = full resolution; True (k=4) or a number k: static treecode
+        cell_moments="quad",                # what a coarse cell carries: "quad", "dipole" or None (plain cells)
         aperture_nside=None,                # coarser nside for the aperture statistics (None = nside)
         memory_budget_gb=None,              # pair-memory budget of the preflight check (None = free device memory)
         pair_search_precision="float64",    # "float64" / "float32"
@@ -114,6 +115,20 @@ First create an Integrated3PCF object:
 For GPU runs use `map_precision="float32", accumulation_precision="float64"`: the maps are
 handled at float32, every pair sum is accumulated at float64. Keep `map_precision="float64"`
 when agreement with a float64 reference at machine precision is required.
+
+**Static treecode and moment-carrying cells.** With `resolution_factor=k` every angular bin is
+measured on the coarsest HEALPix level whose pixel is smaller than θ_lo / k: the pixels of a
+patch are grouped into cells (binary-mask centroids) carrying the weight sum and the weighted
+mean, which cuts the pair count by orders of magnitude at large separations. That is a
+*windowed* estimator (use the same `resolution_factor` for data, simulations and covariances;
+`level_table` records it). Rotating every child pair with its parents' position angle
+suppresses ξ− by ⟨cos 4δφ⟩ and γ_t by ⟨cos 2δφ⟩; `cell_moments="quad"` (default) adds the
+dipole and quadrupole of the transported shear to every coarse cell and corrects those
+phases to second order in the children's offsets, which removes almost all of the ξ−
+suppression and its information loss (`"dipole"`: first order, cheaper, information fix
+only; `None`: the plain cells). The same cells correct the aperture statistics measured on a
+coarse `aperture_nside` level (tangential phase and the filter's variation across a cell).
+Nothing of this runs at full resolution.
 
 ### Selecting patch centers from a mask
 
@@ -412,7 +427,8 @@ map, on CPU or GPU, with the same `preprocess` / `save_pairs` / `load_pairs` wor
 from CosmoFuse import Global2PCF
 
 g2 = Global2PCF(nside, mask=mask, nbins=20, theta_min=5, theta_max=250,
-                resolution_factor=None, pack_pairs=False, device="auto",   # or device=[0, 1]
+                resolution_factor=None, cell_moments="quad",             # treecode + moment-carrying cells
+                pack_pairs=False, device="auto",                         # or device=[0, 1]
                 pack_host_pairs=False)              # True: 8-byte pairs in RAM and in the file
 g2.preprocess()                      # or g2.load_pairs("g2.h5") after g2.save_pairs(...)
 

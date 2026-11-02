@@ -107,6 +107,10 @@ class TestGlobal2PCF(unittest.TestCase):
     def test_packed_pairs(self):
         self._check(pack_pairs=True, resolution_factor=2.0)
 
+    def test_cell_moments(self):
+        self._check(resolution_factor=2.0, cell_moments="quad")
+        self._check(pack_pairs=True, resolution_factor=2.0, cell_moments="dipole")
+
     def test_one_element_list_is_one_device(self):
         g = _global2(self.mask, ["cpu"], tile_nside=8)
         self.assertEqual(len(g._engines), 1)

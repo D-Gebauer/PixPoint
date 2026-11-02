@@ -44,6 +44,7 @@ from .global_geometry import (
     radec_to_xyz,
     unique_pairs,
 )
+from .moments import cell_frames, pair_angles
 from .multi_device import (
     balanced_ranges,
     device_list,
@@ -58,10 +59,25 @@ from .utils import pixel2RaDec
 FORMAT_KIND = "CosmoFuse.Global2PCF"
 # Version 1: exact pairs (``pair_inds``/``pair_exp2phi``).  Version 2 is
 # written only for ``pack_host_pairs=True``: the packed payload instead.
-FORMAT_VERSION = 2
+# Version 3 (8.0): exact pairs plus the moment geometry of the coarse-level
+# pairs (``pair_phi``, ``pair_inv_d``, ``coarse_pair_offsets``) when the
+# treecode cells carry moments (``cell_moments``).
+FORMAT_VERSION = 3
+_MOMENT_FORMAT_VERSION = 3
+_PACKED_FORMAT_VERSION = 2
 _EXACT_FORMAT_VERSION = 1
 # packing jobs in flight behind the pair search of find_pairs()
 _PACK_WORKERS = 4
+
+
+def _level_ra_dec(level: LevelElements) -> Tuple[np.ndarray, np.ndarray]:
+    """(ra, dec) of a level's elements in id order (``ids`` ascend per tile
+    and the levels' ids are contiguous, so ``ids - ids.min()`` indexes them)."""
+    order = np.argsort(level.ids, kind="stable")
+    xyz = np.asarray(level.xyz, dtype=np.float64)[:, order]
+    ra = np.arctan2(xyz[1], xyz[0])
+    dec = np.arcsin(np.clip(xyz[2], -1.0, 1.0))
+    return ra, dec
 
 
 class _TileEngine(Integrated3PCF):
@@ -120,6 +136,10 @@ class Global2PCF:
             the host memory, and ``prepare()`` / ``load_pairs()`` skip the
             packing.  The device state is bitwise the one ``pack_pairs=True``
             builds in ``prepare()``; the file is then no longer exact.
+        cell_moments: as for :class:`~CosmoFuse.correlations.Integrated3PCF`
+            (``"quad"`` by default): what a coarse treecode cell carries, and
+            with it the second-order phase correction of ξ− and γ_t in the
+            coarse bins.  Inert at full resolution.
     """
 
     def __init__(
@@ -139,6 +159,7 @@ class Global2PCF:
         pack_pairs: bool = False,
         fastmath: bool = True,
         pack_host_pairs: bool = False,
+        cell_moments: Optional[str] = "quad",
     ) -> None:
         devices: List[Any] = (
             device_list(device) if isinstance(device, (list, tuple, set)) else [device]
@@ -173,6 +194,7 @@ class Global2PCF:
                 resolution_factor=resolution_factor,
                 pair_search_precision=pair_search_precision,
                 pack_pairs=pack_pairs,
+                cell_moments=cell_moments,
             )
             for dev in devices
         ]
@@ -332,23 +354,40 @@ class Global2PCF:
         if not self.pack_host_pairs:
             pair_inds: List[np.ndarray] = []
             pair_exp2phi: List[np.ndarray] = []
+            pair_phi: List[np.ndarray] = []
+            pair_inv_d: List[np.ndarray] = []
+            frames_cache: Dict[int, Tuple[np.ndarray, int]] = {}
             for t in range(self.n_tiles):
-                inds_t, exp_t, bins_t = self._search_tile(
-                    t, elements, groups, reach_cache
+                inds_t, exp_t, bins_t, phi_t, inv_d_t = self._search_tile(
+                    t, elements, groups, reach_cache, frames_cache
                 )
                 pair_inds.append(inds_t)
                 pair_exp2phi.append(exp_t)
                 bins.append(bins_t)
+                pair_phi.append(phi_t)
+                pair_inv_d.append(inv_d_t)
+            moments = treecode is not None and e.cell_moments is not None
             self._install(
-                bins, treecode, pair_inds=pair_inds, pair_exp2phi=pair_exp2phi
+                bins,
+                treecode,
+                pair_inds=pair_inds,
+                pair_exp2phi=pair_exp2phi,
+                pair_phi=pair_phi if moments else None,
+                pair_inv_d=pair_inv_d if moments else None,
             )
             return
-        jobs: List["Future[Tuple[np.ndarray, np.ndarray, np.ndarray]]"] = []
+        moments = treecode is not None and e.cell_moments is not None
+        b_c = e._first_coarse_bin()
+        edges = np.asarray(e.binedges, dtype=np.float64)
+        frames_cache_p: Dict[int, Tuple[np.ndarray, int]] = {}
+        jobs: List[
+            "Future[Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]]"
+        ] = []
         with ThreadPoolExecutor(max_workers=_PACK_WORKERS) as pool:
             try:
                 for t in range(self.n_tiles):
-                    inds_t, exp_t, bins_t = self._search_tile(
-                        t, elements, groups, reach_cache
+                    inds_t, exp_t, bins_t, phi_t, inv_d_t = self._search_tile(
+                        t, elements, groups, reach_cache, frames_cache_p
                     )
                     bins.append(bins_t)
                     jobs.append(
@@ -359,9 +398,10 @@ class Global2PCF:
                             bins_t,
                             groups,
                             e.index_dtype,
+                            (phi_t, inv_d_t, b_c, edges) if moments else None,
                         )
                     )
-                    del inds_t, exp_t
+                    del inds_t, exp_t, phi_t, inv_d_t
                     # bound the exact tiles waiting to be packed
                     while sum(not f.done() for f in jobs) > 2 * _PACK_WORKERS:
                         next(f for f in jobs if not f.done()).result()
@@ -378,6 +418,7 @@ class Global2PCF:
                 [p[1] for p in packed],
                 [p[2] for p in packed],
             ),
+            packed_inv_d=[p[3] for p in packed] if moments else None,
         )
 
     def _search_tile(
@@ -386,10 +427,18 @@ class Global2PCF:
         elements: Dict[int, LevelElements],
         groups: Sequence[Tuple[int, int, int]],
         reach_cache: Dict[Tuple[int, float], np.ndarray],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The unique pairs owned by tile ``t``, every resolution level."""
+        frames_cache: Optional[Dict[int, Tuple[np.ndarray, int]]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """The unique pairs owned by tile ``t``, every resolution level, with
+        the moment geometry (angles, inverse separation) of the coarse-level
+        pairs when ``cell_moments`` is on (empty arrays otherwise)."""
         e, ts = self._engine, self.tiles
         inds_t, exp_t = [], []
+        phi_t: List[np.ndarray] = []
+        inv_d_t: List[np.ndarray] = []
+        want_moments = e.cell_moments is not None
+        if frames_cache is None:
+            frames_cache = {}
         bins_t = np.zeros(e.nbins, dtype=np.int64)
         for nside_b, b0, b1 in groups:
             level = elements[int(nside_b)]
@@ -415,10 +464,29 @@ class Global2PCF:
             exp[1].imag = s2
             exp_t.append(exp)
             bins_t[b0:b1] = counts
+            if want_moments and int(nside_b) != int(e.nside):
+                # moment geometry of the coarse pairs from the cell frames
+                # (looked up by global id; the frames of a level are built
+                # once and cached across the tiles)
+                frames = frames_cache.get(int(nside_b))
+                if frames is None:
+                    first_id = int(level.ids.min()) if level.ids.size else 0
+                    frames = (cell_frames(*_level_ra_dec(level)), first_id)
+                    frames_cache[int(nside_b)] = frames
+                geom, first_id = frames
+                pa, pb, inv_d = pair_angles(
+                    geom[ids_a.astype(np.int64) - first_id],
+                    geom[ids_b.astype(np.int64) - first_id],
+                )
+                phi_t.append(np.stack((pa, pb)).astype(e.rotation_dtype))
+                inv_d_t.append(inv_d.astype(e.rotation_dtype))
+        rot = e.rotation_dtype
         return (
             np.concatenate(inds_t, axis=1).astype(e.index_dtype, copy=False),
             np.concatenate(exp_t, axis=1),
             bins_t.astype(e.index_dtype),
+            np.concatenate(phi_t, axis=1) if phi_t else np.zeros((2, 0), dtype=rot),
+            np.concatenate(inv_d_t) if inv_d_t else np.zeros(0, dtype=rot),
         )
 
     def _install(
@@ -430,6 +498,9 @@ class Global2PCF:
         packed: Optional[
             Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray]]
         ] = None,
+        pair_phi: Optional[List[np.ndarray]] = None,
+        pair_inv_d: Optional[List[np.ndarray]] = None,
+        packed_inv_d: Optional[List[Any]] = None,
     ) -> None:
         """Hand the tiles' pairs to the engines: exact (``pair_inds``,
         ``pair_exp2phi``) or the ``pack_host_pairs`` payload (``packed`` =
@@ -463,6 +534,9 @@ class Global2PCF:
                 eng.packed_pairs = packed[0][a:b]
                 eng.packed_block_ids = packed[1][a:b]
                 eng.packed_block_sizes = packed[2][a:b]
+            eng.pair_phi = None if pair_phi is None else pair_phi[a:b]
+            eng.pair_inv_d = None if pair_inv_d is None else pair_inv_d[a:b]
+            eng.packed_inv_d = None if packed_inv_d is None else packed_inv_d[a:b]
             eng.bins = bins[a:b]
             # every engine holds every cell: its pairs reach into other tiles
             eng._treecode = treecode
@@ -513,11 +587,19 @@ class Global2PCF:
             bins.extend(eng.bins)
         counts = np.array([int(np.sum(b, dtype=np.int64)) for b in bins], np.int64)
         offsets = np.concatenate(([0], np.cumsum(counts)))
+        moments = all(
+            (eng.packed_inv_d is not None) if packed else (eng.pair_phi is not None)
+            for eng in engines
+        )
         with h5py.File(filepath, "w") as fp:
             fp.attrs["kind"] = FORMAT_KIND
-            fp.attrs["format_version"] = (
-                FORMAT_VERSION if packed else _EXACT_FORMAT_VERSION
-            )
+            if moments:
+                fp.attrs["format_version"] = _MOMENT_FORMAT_VERSION
+                fp.attrs["cell_moments"] = str(e.cell_moments)
+            else:
+                fp.attrs["format_version"] = (
+                    _PACKED_FORMAT_VERSION if packed else _EXACT_FORMAT_VERSION
+                )
             fp.attrs["nside"] = int(e.nside)
             fp.attrs["nbins"] = int(e.nbins)
             fp.attrs["theta_min"] = float(e.theta_min)
@@ -537,8 +619,12 @@ class Global2PCF:
             )
             if packed:
                 self._write_packed(fp, offsets)
+                if moments:
+                    self._write_packed_moments(fp)
             else:
                 self._write_exact(fp, offsets)
+                if moments:
+                    self._write_moments(fp)
             tc = e._treecode
             if tc is not None:
                 gp = fp.create_group("treecode")
@@ -572,6 +658,43 @@ class Global2PCF:
             if b > a:
                 d_inds[:, a:b] = inds
                 d_exp[:, a:b] = exp
+
+    def _write_moments(self, fp: h5py.File) -> None:
+        """The coarse-level pairs' angles and inverse separations per tile."""
+        e = self._engine
+        phi: List[np.ndarray] = []
+        inv_d: List[np.ndarray] = []
+        for eng in self._engines:
+            assert eng.pair_phi is not None and eng.pair_inv_d is not None
+            phi.extend(eng.pair_phi)
+            inv_d.extend(eng.pair_inv_d)
+        counts = np.array([p.shape[1] for p in phi], dtype=np.int64)
+        offsets = np.concatenate(([0], np.cumsum(counts)))
+        n = int(offsets[-1])
+        d_phi = fp.create_dataset("pair_phi", shape=(2, n), dtype=e.rotation_dtype)
+        d_inv = fp.create_dataset("pair_inv_d", shape=(n,), dtype=e.rotation_dtype)
+        for t, (p, d) in enumerate(zip(phi, inv_d)):
+            a, b = int(offsets[t]), int(offsets[t + 1])
+            if b > a:
+                d_phi[:, a:b] = p
+                d_inv[a:b] = d
+        fp.create_dataset("coarse_pair_offsets", data=offsets)
+
+    def _write_packed_moments(self, fp: h5py.File) -> None:
+        engines: List[Any] = self._engines  # checked by save_pairs()
+        codes = [c for eng in engines for c in eng.packed_inv_d]
+        offsets = np.concatenate(
+            ([0], np.cumsum([c.size for c in codes], dtype=np.int64))
+        )
+        fp.create_dataset(
+            "packed_inv_d",
+            data=(
+                np.concatenate(codes).astype(np.uint16)
+                if codes
+                else np.zeros(0, dtype=np.uint16)
+            ),
+        )
+        fp.create_dataset("coarse_pair_offsets", data=offsets)
 
     def _write_packed(self, fp: h5py.File, offsets: np.ndarray) -> None:
         e = self._engine
@@ -660,6 +783,25 @@ class Global2PCF:
             n = self.n_tiles
             packed = None
             pair_inds = pair_exp2phi = None
+            pair_phi = pair_inv_d = None
+            packed_inv_d = None
+            if "packed_inv_d" in fp:
+                c_off = fp["coarse_pair_offsets"][:]
+                codes = fp["packed_inv_d"][:]
+                packed_inv_d = [codes[c_off[t] : c_off[t + 1]] for t in range(n)]
+            elif "pair_phi" in fp:
+                c_off = fp["coarse_pair_offsets"][:]
+                phi_flat = fp["pair_phi"][:].astype(e.rotation_dtype, copy=False)
+                inv_flat = fp["pair_inv_d"][:].astype(e.rotation_dtype, copy=False)
+                pair_phi = [phi_flat[:, c_off[t] : c_off[t + 1]] for t in range(n)]
+                pair_inv_d = [inv_flat[c_off[t] : c_off[t + 1]] for t in range(n)]
+            elif e.cell_moments is not None and "treecode" in fp:
+                raise ValueError(
+                    f"{filepath} carries no moment geometry (written without "
+                    f"cell_moments, or packed); this estimator asks for "
+                    f"cell_moments={e.cell_moments!r}. Recompute the pairs, or "
+                    "construct with cell_moments=None."
+                )
             if "packed_pairs" in fp:
                 flat = fp["packed_pairs"][:]
                 ids_flat = fp["packed_block_ids"][:].astype(e.index_dtype, copy=False)
@@ -707,6 +849,9 @@ class Global2PCF:
             pair_inds=pair_inds,
             pair_exp2phi=pair_exp2phi,
             packed=packed,
+            pair_phi=pair_phi,
+            pair_inv_d=pair_inv_d,
+            packed_inv_d=packed_inv_d,
         )
         self.prepare(release_host_pairs=release_host_pairs)
 

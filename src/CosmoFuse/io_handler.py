@@ -34,10 +34,19 @@ class PairIOHandler:
     exact indices and rotation factors.  Such a file defines a slightly
     different estimator, so it gets its own version rather than sneaking
     past a reader that expects exact geometry.
+
+    Format version 5 (8.0) is written when the pairs carry the moment
+    geometry of ``cell_moments`` (a treecode with coarse levels): the full
+    position angles ``pair_phi`` ``(2, n_coarse)`` and the inverse
+    separation ``pair_inv_d`` of the coarse-level pairs (a contiguous tail
+    of every patch's pair list; ``coarse_pair_offsets`` per patch) and the
+    ``cell_moments`` attribute.  A reader asked for moments refuses a file
+    without them instead of guessing.
     """
 
-    FORMAT_VERSION = 4
+    FORMAT_VERSION = 5
     MIN_FORMAT_VERSION = 2
+    MOMENT_FORMAT_VERSION = 5
     PACKED_FORMAT_VERSION = 4
     TREECODE_FORMAT_VERSION = 3
     FULL_RESOLUTION_FORMAT_VERSION = 2
@@ -92,7 +101,14 @@ class PairIOHandler:
         pair_name = "tc_pair_inds" if virtual_rows else "pair_inds"
         q_name = "tc_Q_inds" if virtual_rows else "Q_inds"
 
-        if packed:
+        moments = treecode is not None and (
+            (owner.packed_inv_d is not None)
+            if packed
+            else (owner.pair_phi is not None and owner.pair_inv_d is not None)
+        )
+        if moments:
+            version = PairIOHandler.MOMENT_FORMAT_VERSION
+        elif packed:
             version = PairIOHandler.PACKED_FORMAT_VERSION
         elif virtual_rows:
             version = PairIOHandler.TREECODE_FORMAT_VERSION
@@ -106,6 +122,8 @@ class PairIOHandler:
             # Provenance of the estimator (ignored by old readers).
             if owner.resolution_factor is not None:
                 fp.attrs["resolution_factor"] = float(owner.resolution_factor)
+            if moments:
+                fp.attrs["cell_moments"] = str(owner.cell_moments)
             fp.attrs["aperture_nside"] = int(owner.aperture_nside or owner.nside)
             fp.create_dataset(
                 "level_nside", data=np.asarray(owner.level_nside, dtype=np.int64)
@@ -151,6 +169,8 @@ class PairIOHandler:
 
             if packed:
                 PairIOHandler._save_packed_pairs(owner, fp, pair_offsets, total_pairs)
+                if moments:
+                    PairIOHandler._save_packed_moments(owner, fp)
             else:
                 assert owner.pair_inds is not None and owner.pair_exp2phi is not None
                 d_inds = fp.create_dataset(
@@ -166,6 +186,8 @@ class PairIOHandler:
                     if stop > start:
                         d_inds[:, start:stop] = owner.pair_inds[i]
                         d_exp[:, start:stop] = owner.pair_exp2phi[i]
+                if moments:
+                    PairIOHandler._save_moment_pairs(owner, fp)
 
             q_inds_dtype = (
                 np.asarray(owner.Q_inds[0]).dtype if n_patches else owner.index_dtype
@@ -189,6 +211,41 @@ class PairIOHandler:
                 "Q_patch_area",
                 data=np.asarray(owner.Q_patch_area, dtype=owner.rotation_dtype),
             )
+
+    @staticmethod
+    def _save_moment_pairs(owner: "Integrated3PCF", fp: "h5py.File") -> None:
+        """The coarse-level pairs' angles and inverse separations (format 5)."""
+        assert owner.pair_phi is not None and owner.pair_inv_d is not None
+        counts = np.array([p.shape[1] for p in owner.pair_phi], dtype=np.int64)
+        offsets = np.zeros(owner.n_patches + 1, dtype=np.int64)
+        offsets[1:] = np.cumsum(counts)
+        total = int(offsets[-1])
+        dtype = owner.rotation_dtype
+        d_phi = fp.create_dataset("pair_phi", shape=(2, total), dtype=dtype)
+        d_inv = fp.create_dataset("pair_inv_d", shape=(total,), dtype=dtype)
+        for i in range(owner.n_patches):
+            a, b = int(offsets[i]), int(offsets[i + 1])
+            if b > a:
+                d_phi[:, a:b] = owner.pair_phi[i]
+                d_inv[a:b] = owner.pair_inv_d[i]
+        fp.create_dataset("coarse_pair_offsets", data=offsets)
+
+    @staticmethod
+    def _save_packed_moments(owner: "Integrated3PCF", fp: "h5py.File") -> None:
+        """The coarse pairs' separation codes of a packed payload (their angle
+        codes are inside ``packed_pairs``)."""
+        assert owner.packed_inv_d is not None
+        counts = np.array([c.size for c in owner.packed_inv_d], dtype=np.int64)
+        offsets = np.zeros(owner.n_patches + 1, dtype=np.int64)
+        offsets[1:] = np.cumsum(counts)
+        d = fp.create_dataset(
+            "packed_inv_d", shape=(int(offsets[-1]),), dtype=np.uint16
+        )
+        for i in range(owner.n_patches):
+            a, b = int(offsets[i]), int(offsets[i + 1])
+            if b > a:
+                d[a:b] = owner.packed_inv_d[i]
+        fp.create_dataset("coarse_pair_offsets", data=offsets)
 
     @staticmethod
     def _save_packed_pairs(
@@ -247,6 +304,7 @@ class PairIOHandler:
         owner.packed_pairs = None
         owner.packed_block_ids = None
         owner.packed_block_sizes = None
+        owner.packed_inv_d = None
 
         with h5py.File(filepath, "r") as fp:
             version = int(fp.attrs.get("format_version", 1))
@@ -389,6 +447,39 @@ class PairIOHandler:
         q_patch_area = fp["Q_patch_area"][start_ind:stop_ind].astype(
             owner.rotation_dtype, copy=False
         )
+
+        # Moment geometry of the coarse pairs (format 5); an instance that
+        # asks for moments refuses a file without them.
+        owner.pair_phi = None
+        owner.pair_inv_d = None
+        owner.packed_inv_d = None
+        has_moments = "pair_phi" in fp or "packed_inv_d" in fp
+        if "packed_inv_d" in fp:
+            c_off = fp["coarse_pair_offsets"][:]
+            c0, c1 = int(c_off[start_ind]), int(c_off[stop_ind])
+            codes_flat = fp["packed_inv_d"][c0:c1]
+            owner.packed_inv_d = [
+                codes_flat[int(c_off[i]) - c0 : int(c_off[i + 1]) - c0]
+                for i in range(start_ind, stop_ind)
+            ]
+        elif has_moments:
+            c_off = fp["coarse_pair_offsets"][:]
+            c0, c1 = int(c_off[start_ind]), int(c_off[stop_ind])
+            phi_flat = fp["pair_phi"][:, c0:c1].astype(owner.rotation_dtype, copy=False)
+            inv_flat = fp["pair_inv_d"][c0:c1].astype(owner.rotation_dtype, copy=False)
+            owner.pair_phi = []
+            owner.pair_inv_d = []
+            for i in range(start_ind, stop_ind):
+                a, b = int(c_off[i]) - c0, int(c_off[i + 1]) - c0
+                owner.pair_phi.append(phi_flat[:, a:b])
+                owner.pair_inv_d.append(inv_flat[a:b])
+        elif owner.cell_moments is not None and "treecode" in fp:
+            raise ValueError(
+                "this pair file carries no moment geometry (written without "
+                "cell_moments, or packed); this Integrated3PCF asks for "
+                f"cell_moments={owner.cell_moments!r}. Recompute the pairs, or "
+                "construct with cell_moments=None."
+            )
 
         # Per-patch host lists are zero-copy views into the flat arrays.
         if packed:

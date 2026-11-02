@@ -1,5 +1,94 @@
 # Changelog
 
+## 8.0.0 (unreleased)
+
+**Breaking.** Stage A of the 8.0.0 plan (`RELEASE_8.0.0_GUIDE.md`): the
+estimators lose the two pieces of error estimation they had grown.
+CosmoFuse measures; covariances, jackknives and projections are the
+analysis's job.
+
+- **`TwoPointResult` holds the sums, not the per-tile sums.** `num[name]` and
+  `weight` are `(ncomb, nbins)` float64 arrays, Σ w_i w_j f_i f_j and Σ w_i w_j
+  over every pair of the footprint; `tile_num`, `tile_weight`, `n_tiles` and
+  `jackknife()` are gone, and `+` adds two results instead of concatenating
+  their tiles. One device reduces its tiles exactly as the old properties
+  did (same float64 sum over the same array), so single-device estimates are
+  unchanged; with `device=[...]` every device reduces its own tiles and the
+  totals add in device order, so a multi-device result now equals the
+  single-device one to the order of that final add (gate: ≤ 1e-13 of the
+  largest sum, `tests/test_global_multi_device.py`) instead of bitwise. Tiles
+  remain the unit of the pair search, of the device split and of the pair
+  files (format unchanged); a tile-wise jackknife is a different measurement
+  (one `Global2PCF` per region, or a mask per region), not a result method.
+- **`ThreePointResult.to_centroid()` removed.** `Global3PCF` reports spin-2
+  values in the x-projection (every vertex projected along its leg to the
+  centre, f̃ = −f e^{−2iβ}); a theory prediction is converted to that
+  projection per triangle. The flat-sky rotation to the centroid projection
+  lives on in the paper repository's scripts.
+- **`compute_sumofweights()` and the `sumofweights=` keyword of `gg`, `kk`,
+  `kg` removed.** The tomographic kernels accumulate Σ w_i w_j in the same
+  pass over the pairs on both backends, so a precomputed sum only replaced the
+  kernel's own denominators and never saved a reduction; the plumbing
+  (`_normalize_tomo_sumofweights_*`, `_symmetrised_denominators`,
+  `_compute_tomo_sumofweights`, the `_tomo_sumofweights_cache*` fields of
+  `ComputeContext`) goes with it. The private single-map references keep
+  their `sumofweights=` argument and `_compute_xipm_sumofweights`, because
+  their GPU kernels do not accumulate denominators.
+- **Moment-carrying treecode cells (`cell_moments`, default `"quad"`).**
+  Every coarse treecode cell now carries, besides its weight sum and mean,
+  the dipole and quadrupole of the weighted shear about its centroid, with
+  the shear parallel-transported into the cell frame, and the pair kernels
+  of the coarse bins correct the rotation phase of every child pair to
+  second order in the children's offsets (`CosmoFuse/moments.py` has the
+  expansion). The plain treecode suppressed ξ− by `⟨cos 4δφ⟩` (~3 % at
+  k = 4, 10 % at k = 2) and leaked the parity-odd pair product as noise; with
+  `"quad"` the mean ξ− error of the test field drops 6× at p/θ = 0.23 and
+  20–50× at production resolutions (`benchmarks/moments/RESULTS.md`), γ_t
+  gets the same window with the lens cell's scalar moments, ξ+ uses the
+  transported mean (1e-5 shifts), ξ_g is untouched. `"dipole"` is the
+  first order alone (removes the information loss, flips the sign of the
+  mean error; cheaper), `None` the cells of 7.x. **Treecode measurements
+  change with this release** unless `cell_moments=None` is passed; full
+  resolution is bitwise unchanged (nothing is allocated or launched).
+  Implementation: the coarse pairs carry the full position angles at both
+  ends and 1/separation (`pair_phi`, `pair_inv_d`; packed: the uint16
+  angle codes of the coarse blocks encode φ instead of 2φ, plus a uint16
+  separation code per coarse pair, 10 B/pair there), the moments are
+  built per level straight from the pixel rows (`cuda/moment_rows.cu`,
+  one kernel per level; a Numba twin), and the coarse bins run a second
+  pass through moment-corrected tiles (`tile_xipm_mom`, `tile_ds_mom`,
+  `tile_multi_mom` in `pair_tiles.cuh`, `MOM` ∈ {1, 2}) after the plain
+  tiles. `cell_moments` is part of `level_table` and of `ZetaWriter`'s
+  provenance; pair files with moments carry format version 5 (`Global2PCF`
+  version 3), and a file written without them refuses a moment estimator.
+  Measured (A100, `benchmarks/moments/RESULTS.md`): the T10 ζ-level price
+  of k = 2.9 falls from 0.27 to 0.20 σ_patch and of k = 1.5 from 0.81 to
+  0.39 (ζ_a,−; ζ_a,+ is a binning window and unchanged); the cost is nil at
+  one source bin but the quad tile spills registers at four (gg 1.6 → 5.4
+  ms at nside 1024, k = 4; dipole 2.4 ms) -- a register-allocation fix is
+  pending, the data vector does not depend on it.
+- **Moment-carrying aperture cells** (`aperture_nside` with `cell_moments`).
+  The aperture is the γ_t pair statistic between the patch centre and the
+  disc cell, so the same cells fix the tangential phase and, with the
+  filter's derivatives (`correlation_helpers.filter_derivatives`: analytic
+  for the shipped filters, finite differences otherwise), the filter value
+  at the children instead of at the cell centre. `M_a`, `M_g` with a filter
+  U and the aperture sections of `three_by_two_pt` run the moment kernels
+  (`gpu_aperture_*_tomo_mom`, `gpu_3x2pt_tomo_aperture_mom`); the patch-mean
+  `M_g` has a constant filter and needs nothing. On the test field at
+  p/θ_Q = 0.18 the per-cell residual goes 4–9 % → 0.5 % → 0.03 % for mono →
+  dipole → quad and the patch sums from ±4 % to ±5e-4.
+- **Surface that was not the estimator's, removed.** `Integrated3PCF.zeta_*`
+  (8 methods) and `Integrated3PCF.calculate_all_zetas` were pass-throughs to
+  the `correlation_helpers` functions, duplicated by `IntegratedResult.zetas()`;
+  `get_pairs_patch`, `get_pairs_patch_M_a`, `__get_pairs_helper__`,
+  `__get_pairs_M_a_helper__` and `aperture_filter_key` were forwarding shims
+  to `PairGeometry`'s static methods (which `pair_geometry.py` now calls
+  directly); the setters of `inds_dev`, `exp2phi_dev`, `bins_dev`,
+  `tot_bins_dev`, `tot_bins_reduceat_dev` and `ntotpairs` existed for tests
+  (`prepare()` and the tests write the `ComputeContext`); the getters stay.
+  None of these had a caller in the package.
+
 ## 7.7.0 (2026-10-26)
 
 **CUDA kernels compile as C++20.** Every NVRTC compilation (`RawModule`,

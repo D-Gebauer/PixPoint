@@ -28,6 +28,19 @@ from .density import (
     _cpu_density_shear_corr_kernel,
     _cpu_density_shear_tomo_vectorized_kernel,
 )
+from .moments import (
+    _build_cupy_3x2pt_aperture_moments_kernel,
+    _build_cupy_3x2pt_moment_kernel,
+    _build_cupy_aperture_moments_kernels,
+    _build_cupy_ds_moment_kernels,
+    _build_cupy_moment_level_kernel,
+    _build_cupy_xipm_moment_kernels,
+    _cpu_aperture_density_moments_kernel,
+    _cpu_aperture_shear_moments_kernel,
+    _cpu_density_shear_tomo_moments_kernel,
+    _cpu_moment_level_kernel,
+    _cpu_xipm_tomo_moments_kernel,
+)
 from .shear import (
     _build_cupy_tomo_packed_kernel,
     _build_cupy_tomo_vectorized_kernel,
@@ -151,6 +164,14 @@ class Backend:
         kernel_3x2pt_tomo_pairs: Optional[Any] = None,
         degrade_rows_kernel: Optional[Any] = None,
         kernel_3pcf_multipoles: Optional[Any] = None,
+        kernel_moment_level: Optional[Any] = None,
+        xipm_tomo_moments_kernel: Optional[Any] = None,
+        kernel_density_shear_tomo_moments: Optional[Any] = None,
+        kernel_3x2pt_tomo_moments: Optional[Any] = None,
+        aperture_shear_moments_kernel: Optional[Any] = None,
+        aperture_density_moments_kernel: Optional[Any] = None,
+        aperture_tomo_moments_kernel: Optional[Any] = None,
+        kernel_3x2pt_aperture_moments: Optional[Any] = None,
     ) -> None:
         # Kernel slots are Any: a Numba dispatcher, a CuPy kernel, a launch
         # wrapper, or None where the backend has no such kernel.
@@ -187,6 +208,18 @@ class Backend:
         self.degrade_rows_kernel: Any = degrade_rows_kernel
         # Step 1 of the multipole three-point estimator (Global3PCF).
         self.kernel_3pcf_multipoles: Any = kernel_3pcf_multipoles
+        # Moment-carrying treecode cells: the per-level moment builder and
+        # the moment-corrected pair kernels of the coarse bins.
+        self.kernel_moment_level: Any = kernel_moment_level
+        self.xipm_tomo_moments_kernel: Any = xipm_tomo_moments_kernel
+        self.kernel_density_shear_tomo_moments: Any = kernel_density_shear_tomo_moments
+        self.kernel_3x2pt_tomo_moments: Any = kernel_3x2pt_tomo_moments
+        # ... and the aperture statistics of moment-carrying aperture cells:
+        # CPU single-map kernels, GPU block-reduced tomographic kernels.
+        self.aperture_shear_moments_kernel: Any = aperture_shear_moments_kernel
+        self.aperture_density_moments_kernel: Any = aperture_density_moments_kernel
+        self.aperture_tomo_moments_kernel: Any = aperture_tomo_moments_kernel
+        self.kernel_3x2pt_aperture_moments: Any = kernel_3x2pt_aperture_moments
 
         self.asarray = module.asarray
         self.zeros = module.zeros
@@ -544,6 +577,11 @@ def get_backend(device: Union[str, int] = "auto") -> "Backend":
             kernel_density_shear_tomo_vectorized=_cpu_density_shear_tomo_vectorized_kernel,  # noqa: E501
             kernel_3x2pt_tomo_fused=_cpu_3x2pt_tomo_fused_kernel,
             kernel_3pcf_multipoles=_cpu_3pcf_multipoles,
+            kernel_moment_level=_cpu_moment_level_kernel,
+            xipm_tomo_moments_kernel=_cpu_xipm_tomo_moments_kernel,
+            kernel_density_shear_tomo_moments=_cpu_density_shear_tomo_moments_kernel,
+            aperture_shear_moments_kernel=_cpu_aperture_shear_moments_kernel,
+            aperture_density_moments_kernel=_cpu_aperture_density_moments_kernel,
         )
 
     else:  # device_type == "gpu"
@@ -586,6 +624,14 @@ def get_backend(device: Union[str, int] = "auto") -> "Backend":
                 kernel_3x2pt_tomo_pairs=_build_cupy_3x2pt_tomo_pairs_kernel(cupy),
                 degrade_rows_kernel=_build_cupy_degrade_rows_kernel(cupy),
                 kernel_3pcf_multipoles=build_cupy_3pcf_multipoles_kernel(cupy),
+                kernel_moment_level=_build_cupy_moment_level_kernel(cupy),
+                xipm_tomo_moments_kernel=_build_cupy_xipm_moment_kernels(cupy),
+                kernel_density_shear_tomo_moments=_build_cupy_ds_moment_kernels(cupy),
+                kernel_3x2pt_tomo_moments=_build_cupy_3x2pt_moment_kernel(cupy),
+                aperture_tomo_moments_kernel=_build_cupy_aperture_moments_kernels(cupy),
+                kernel_3x2pt_aperture_moments=_build_cupy_3x2pt_aperture_moments_kernel(
+                    cupy
+                ),
             )
         except ImportError:
             if device == "auto":

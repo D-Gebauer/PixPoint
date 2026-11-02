@@ -31,10 +31,11 @@ Conventions
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import healpy as hp
 import numpy as np
+import scipy.sparse as sp
 
 
 def is_power_of_two(n: int) -> bool:
@@ -363,6 +364,47 @@ class TreecodeGeometry:
             cell_ra=cell_ra,
             cell_dec=cell_dec,
         )
+
+    def pixel_children(self, level: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Direct CSR ``(indptr, indices)`` from the cells of ``level`` to
+        their member base pixels (RING ids), composed from the child chain
+        and cached.  The moment-carrying cells are built from this (one pass
+        pixels -> cells per level, not level by level: composing moments
+        needs a shift of the expansion centre and is exact only to second
+        order)."""
+        cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = self.__dict__.setdefault(
+            "_pixel_children_cache", {}
+        )
+        hit = cache.get(level)
+        if hit is not None:
+            return hit
+        if level == 0:
+            out = (
+                np.asarray(self.child_indptr[0], dtype=np.int64),
+                np.asarray(self.child_indices[0], dtype=np.int64),
+            )
+        else:
+            p_indptr, p_indices = self.pixel_children(level - 1)
+            n_prev = int(p_indptr.size - 1)
+            prev = sp.csr_matrix(
+                (np.ones(p_indices.size), p_indices, p_indptr),
+                shape=(n_prev, int(hp.nside2npix(self.base_nside))),
+            )
+            indptr = np.asarray(self.child_indptr[level], dtype=np.int64)
+            indices = np.asarray(self.child_indices[level], dtype=np.int64)
+            parent = sp.csr_matrix(
+                (np.ones(indices.size), indices, indptr),
+                shape=(int(indptr.size - 1), n_prev),
+            )
+            direct = (parent @ prev).tocsr()
+            direct.sum_duplicates()
+            direct.sort_indices()
+            out = (
+                np.asarray(direct.indptr, dtype=np.int64),
+                np.asarray(direct.indices, dtype=np.int64),
+            )
+        cache[level] = out
+        return out
 
     def members_per_cell(self, level: int) -> np.ndarray:
         """Number of base pixels in every cell of ``level`` (for tests)."""

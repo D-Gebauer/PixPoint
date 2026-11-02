@@ -77,3 +77,85 @@ __global__ void gpu_tiled_packed_reduce_3x2pt(
         out_xipm_num, out_xipm_den, out_xig_num, out_xig_den, out_xit_num, out_xit_den,
         nbins_total, bin_flat);
 }
+
+
+/* Moment-corrected multi-statistic tile for the coarse bins (pair_tiles.cuh:
+   tile_multi_mom): xi+- and xi_t with the moments, xi_g plain, all three
+   statistics on.  Geometry conventions as the *_mom kernels of the
+   standalone files. */
+template<typename T, typename QT, int N_DENSITY, int N_SHEAR, int DD_AUTO_ONLY, int MOM,
+         typename I, typename ACC>
+__global__ void gpu_tiled_tomo_reduce_3x2pt_mom(
+    const T* density,
+    const T* shear,
+    const T* density_w,
+    const T* shear_w,
+    const T* mom_lens,
+    const T* mom_src,
+    const I* ind_i,
+    const I* ind_j,
+    const QT* phi_i,
+    const QT* phi_j,
+    const QT* inv_d,
+    const long long* bin_offsets,
+    const long long* mom_base,
+    const long long n_active,
+    ACC* out_xipm_num,
+    ACC* out_xipm_den,
+    ACC* out_xig_num,
+    ACC* out_xig_den,
+    ACC* out_xit_num,
+    ACC* out_xit_den,
+    const long long nbins_total)
+{
+    const long long bin_flat = (long long)blockIdx.x;
+    if (bin_flat >= nbins_total) return;
+    const long long start = bin_offsets[bin_flat], stop = bin_offsets[bin_flat + 1];
+    const long long mb = mom_base[bin_flat];
+    if (mb < 0 || stop <= start) return;   /* a fine bin: the plain tile owns it */
+    const UnpackedMomentPairs<T, QT, I> pairs = {
+        ind_i, ind_j, phi_i, phi_j, inv_d, mb - start, n_active};
+    tile_multi_mom<T, N_DENSITY, N_SHEAR, DD_AUTO_ONLY, ACC, UnpackedMomentPairs<T, QT, I>, MOM>(
+        pairs, density, shear, density_w, shear_w, mom_lens, mom_src, start, stop,
+        out_xipm_num, out_xipm_den, out_xig_num, out_xig_den, out_xit_num, out_xit_den,
+        nbins_total, bin_flat);
+}
+
+
+template<typename T, int N_DENSITY, int N_SHEAR, int DD_AUTO_ONLY, int MOM, typename ACC>
+__global__ void gpu_tiled_packed_reduce_3x2pt_mom(
+    const T* density,
+    const T* shear,
+    const T* density_w,
+    const T* shear_w,
+    const T* mom_lens,
+    const T* mom_src,
+    const unsigned short* pairs,
+    const unsigned short* d_codes,
+    const T* d_lo,
+    const T* d_scale,
+    const long long* bin_offsets,
+    const long long* row_base,
+    const long long* mom_base,
+    const int* cell_of_row,
+    ACC* out_xipm_num,
+    ACC* out_xipm_den,
+    ACC* out_xig_num,
+    ACC* out_xig_den,
+    ACC* out_xit_num,
+    ACC* out_xit_den,
+    const long long nbins_total)
+{
+    const long long bin_flat = (long long)blockIdx.x;
+    if (bin_flat >= nbins_total) return;
+    const long long start = bin_offsets[bin_flat], stop = bin_offsets[bin_flat + 1];
+    const long long mb = mom_base[bin_flat];
+    if (mb < 0 || stop <= start) return;   /* a fine bin: the plain tile owns it */
+    const PackedMomentPairs<T> packed = {
+        reinterpret_cast<const ushort4*>(pairs), d_codes, row_base[bin_flat],
+        mb - start, d_lo[bin_flat], d_scale[bin_flat], cell_of_row};
+    tile_multi_mom<T, N_DENSITY, N_SHEAR, DD_AUTO_ONLY, ACC, PackedMomentPairs<T>, MOM>(
+        packed, density, shear, density_w, shear_w, mom_lens, mom_src, start, stop,
+        out_xipm_num, out_xipm_den, out_xig_num, out_xig_den, out_xit_num, out_xit_den,
+        nbins_total, bin_flat);
+}

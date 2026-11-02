@@ -19,7 +19,7 @@ The eight estimators are:
 """
 
 import itertools
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -173,6 +173,112 @@ def Q_schneider(theta: Union[float, np.ndarray], theta_Q: float = 90) -> Any:
     x = np.asarray(theta) / theta_ap
     values = 6.0 / (np.pi * theta_ap**2) * x**2 * (1.0 - x**2)
     return np.where(x < 1.0, values, 0.0)
+
+
+def _dQ_crittenden(theta: Any, theta_Q: float = 90) -> Any:
+    tq = np.radians(theta_Q / 60)
+    t = np.asarray(theta, dtype=np.float64)
+    e = np.exp(-(t**2) / (2 * tq**2))
+    return (2 * t - t**3 / tq**2) / (4 * np.pi * tq**4) * e
+
+
+def _d2Q_crittenden(theta: Any, theta_Q: float = 90) -> Any:
+    tq = np.radians(theta_Q / 60)
+    t = np.asarray(theta, dtype=np.float64)
+    e = np.exp(-(t**2) / (2 * tq**2))
+    return (2 - 5 * t**2 / tq**2 + t**4 / tq**4) / (4 * np.pi * tq**4) * e
+
+
+def _dU_crittenden(theta: Any, theta_Q: float = 90) -> Any:
+    tq = np.radians(theta_Q / 60)
+    t = np.asarray(theta, dtype=np.float64)
+    x2 = t**2 / (2 * tq**2)
+    e = np.exp(-x2)
+    # d/dt [(1 - x2) e] with dx2/dt = t / tq^2
+    return (-(t / tq**2) * e - (1.0 - x2) * (t / tq**2) * e) / (2 * np.pi * tq**2)
+
+
+def _d2U_crittenden(theta: Any, theta_Q: float = 90) -> Any:
+    tq = np.radians(theta_Q / 60)
+    t = np.asarray(theta, dtype=np.float64)
+    x2 = t**2 / (2 * tq**2)
+    e = np.exp(-x2)
+    # f = (1 - x2) e;  f' = -(2 - x2) (t / tq^2) e;  f'' below
+    a = t / tq**2
+    fpp = -(2 - x2) * e / tq**2 + a * a * e * (1.0 + (2 - x2))
+    return fpp / (2 * np.pi * tq**2)
+
+
+def _dQ_schneider(theta: Any, theta_Q: float = 90) -> Any:
+    ta = np.radians(theta_Q / 60)
+    x = np.asarray(theta, dtype=np.float64) / ta
+    d = 6.0 / (np.pi * ta**2) * (2 * x - 4 * x**3) / ta
+    return np.where(x < 1.0, d, 0.0)
+
+
+def _d2Q_schneider(theta: Any, theta_Q: float = 90) -> Any:
+    ta = np.radians(theta_Q / 60)
+    x = np.asarray(theta, dtype=np.float64) / ta
+    d = 6.0 / (np.pi * ta**2) * (2 - 12 * x**2) / ta**2
+    return np.where(x < 1.0, d, 0.0)
+
+
+def _dU_schneider(theta: Any, theta_Q: float = 90) -> Any:
+    ta = np.radians(theta_Q / 60)
+    x = np.asarray(theta, dtype=np.float64) / ta
+    # 9/(pi ta^2) (1 - x^2)(1/3 - x^2) = 9/(pi ta^2) (1/3 - 4/3 x^2 + x^4)
+    d = 9.0 / (np.pi * ta**2) * (-8.0 / 3.0 * x + 4 * x**3) / ta
+    return np.where(x < 1.0, d, 0.0)
+
+
+def _d2U_schneider(theta: Any, theta_Q: float = 90) -> Any:
+    ta = np.radians(theta_Q / 60)
+    x = np.asarray(theta, dtype=np.float64) / ta
+    d = 9.0 / (np.pi * ta**2) * (-8.0 / 3.0 + 12 * x**2) / ta**2
+    return np.where(x < 1.0, d, 0.0)
+
+
+def _zero_filter(theta: Any, theta_Q: float = 90) -> Any:
+    return np.zeros_like(np.asarray(theta, dtype=np.float64))
+
+
+# Analytic first and second derivatives of the shipped filters (U_tophat is
+# piecewise constant: its derivative is zero away from the edge, and the
+# moment correction cannot repair a discontinuity).
+_FILTER_DERIVATIVES: Dict[Any, Tuple[Any, Any]] = {
+    Q_crittenden: (_dQ_crittenden, _d2Q_crittenden),
+    U_crittenden: (_dU_crittenden, _d2U_crittenden),
+    Q_schneider: (_dQ_schneider, _d2Q_schneider),
+    U_schneider: (_dU_schneider, _d2U_schneider),
+    U_tophat: (_zero_filter, _zero_filter),
+}
+
+
+def filter_derivatives(
+    aperture_filter: Callable[..., Any], theta: np.ndarray, theta_Q: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """First and second derivative of an aperture filter at ``theta``
+    (radians): analytic for the shipped filters, central finite differences
+    (step ``1e-3 theta_Q``) for any other ``f(theta, theta_Q)`` or
+    ``f(theta)``."""
+    theta = np.asarray(theta, dtype=np.float64)
+    pair = _FILTER_DERIVATIVES.get(aperture_filter)
+    if pair is not None:
+        return (
+            np.asarray(pair[0](theta, theta_Q), dtype=np.float64),
+            np.asarray(pair[1](theta, theta_Q), dtype=np.float64),
+        )
+
+    def f(t: np.ndarray) -> np.ndarray:
+        try:
+            v = aperture_filter(t, theta_Q)
+        except TypeError:
+            v = aperture_filter(t)
+        return np.asarray(v, dtype=np.float64)
+
+    h = 1e-3 * np.radians(theta_Q / 60)
+    fp, fm, f0 = f(theta + h), f(theta - h), f(theta)
+    return (fp - fm) / (2 * h), (fp - 2 * f0 + fm) / (h * h)
 
 
 def _get_pair_index(nbins: int, i: int, j: int) -> int:

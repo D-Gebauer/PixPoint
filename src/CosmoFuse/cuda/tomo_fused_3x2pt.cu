@@ -38,6 +38,7 @@
  */
 
 __COMMON_CUDA_SOURCE__
+__APERTURE_MOMENTS_CUDA_SOURCE__
 
 
 /*
@@ -225,6 +226,137 @@ __global__ void gpu_3x2pt_tomo_aperture_fused(
                 const long long d_idx = (long long)pix * (long long)N_DENSITY + (long long)y;
                 const T wv = density_w[d_idx];
                 sn[y] += (ACC)(wv * density[d_idx] * qv);
+                sd[y] += (ACC)wv;
+            }
+        }
+#pragma unroll
+        for (int y = 0; y < N_DENSITY; ++y) {
+            ACC n, d;
+            __syncthreads();
+            block_reduce_sum_pair_into(sn[y], sd[y], s1, s2, &n, &d);
+            if (lane == 0) {
+                const long long out_idx = (long long)y * (long long)npatches + x;
+                out_mg_num[out_idx] = area * n;
+                out_mg_den[out_idx] = d;
+            }
+        }
+        return;
+    }
+}
+
+
+/*
+ * Aperture sections with moment-carrying aperture cells (cell_moments with
+ * aperture_nside): see the header of the *_mom kernels in aperture_tomo.cu
+ * for the expansion.  The k section runs the scalar expansion with the
+ * filter's derivatives (zero for the patch mean, whose correction vanishes).
+ * One block per patch, the bins inside it; ACC accumulation as the plain
+ * fused kernel.
+ */
+template<typename T, typename QT, int N_DENSITY, int N_SHEAR, typename ACC, int MOM>
+__global__ void gpu_3x2pt_tomo_aperture_mom(
+    const T* density,
+    const T* shear,
+    const T* density_w,
+    const T* shear_w,
+    const T* mom_lens,          /* (n_appended, N_DENSITY, NM, 2)  */
+    const T* mom_src,           /* (n_appended, N_SHEAR, NM, 2)    */
+    const long long n_active,
+    const int npatches,
+    const unsigned int* q_inds,
+    const QT* q_phi,
+    const QT* q_inv_theta,
+    const QT* q_val,
+    const QT* q_dval,
+    const QT* q_ddval,
+    const long long* q_offsets,
+    const QT* q_patch_area,
+    const unsigned int* k_inds,
+    const QT* k_phi,
+    const QT* k_inv_theta,
+    const QT* k_val,
+    const QT* k_dval,
+    const QT* k_ddval,
+    const long long* k_offsets,
+    const QT* k_area,
+    ACC* out_ma_num,
+    ACC* out_ma_den,
+    ACC* out_mg_num,
+    ACC* out_mg_den,
+    const int section)
+{
+    enum { NM = (MOM >= 2) ? 6 : 3 };
+    const int lane = (int)threadIdx.x;
+    const long long x = (long long)blockIdx.x;
+    if (x >= (long long)npatches) return;
+
+    __shared__ ACC s1[BLOCK_SIZE];
+    __shared__ ACC s2[BLOCK_SIZE];
+
+    if (section == 0) {
+        const long long start = q_offsets[x];
+        const long long stop = q_offsets[x + 1];
+        const ACC area = (ACC)q_patch_area[x];
+        ACC sn[N_SHEAR];
+        ACC sd[N_SHEAR];
+#pragma unroll
+        for (int y = 0; y < N_SHEAR; ++y) { sn[y] = (ACC)0.0; sd[y] = (ACC)0.0; }
+
+        for (long long idx = start + lane; idx < stop; idx += BLOCK_SIZE) {
+            const unsigned int pix = q_inds[idx];
+            const long long cell = (long long)pix - n_active;
+            T s, c;
+            sincos_t((T)q_phi[idx], &s, &c);
+            const T idd = (T)q_inv_theta[idx];
+            const T qv = (T)q_val[idx], qd = (T)q_dval[idx], qdd = (T)q_ddval[idx];
+#pragma unroll
+            for (int y = 0; y < N_SHEAR; ++y) {
+                const long long shear_idx = ((long long)pix * (long long)N_SHEAR + (long long)y) * 2LL;
+                const long long w_idx = (long long)pix * (long long)N_SHEAR + (long long)y;
+                const T wv = shear_w[w_idx];
+                sn[y] += (ACC)(wv * aperture_shear_mom_term<T, MOM>(
+                    mom_src + (cell * N_SHEAR + y) * (2 * NM),
+                    shear[shear_idx], shear[shear_idx + 1LL], s, c, idd, qv, qd, qdd));
+                sd[y] += (ACC)wv;
+            }
+        }
+#pragma unroll
+        for (int y = 0; y < N_SHEAR; ++y) {
+            ACC n, d;
+            __syncthreads();
+            block_reduce_sum_pair_into(sn[y], sd[y], s1, s2, &n, &d);
+            if (lane == 0) {
+                const long long out_idx = (long long)y * (long long)npatches + x;
+                out_ma_num[out_idx] = area * n;
+                out_ma_den[out_idx] = d;
+            }
+        }
+        return;
+    }
+
+    if (section == 1) {
+        const long long start = k_offsets[x];
+        const long long stop = k_offsets[x + 1];
+        const ACC area = (ACC)k_area[x];
+        ACC sn[N_DENSITY];
+        ACC sd[N_DENSITY];
+#pragma unroll
+        for (int y = 0; y < N_DENSITY; ++y) { sn[y] = (ACC)0.0; sd[y] = (ACC)0.0; }
+
+        for (long long idx = start + lane; idx < stop; idx += BLOCK_SIZE) {
+            const unsigned int pix = k_inds[idx];
+            const long long cell = (long long)pix - n_active;
+            T s, c;
+            sincos_t((T)k_phi[idx], &s, &c);
+            const T idd = (T)k_inv_theta[idx];
+            const T uv = (T)k_val[idx], ud = (T)k_dval[idx], udd = (T)k_ddval[idx];
+#pragma unroll
+            for (int y = 0; y < N_DENSITY; ++y) {
+                const long long d_idx = (long long)pix * (long long)N_DENSITY + (long long)y;
+                const T wv = density_w[d_idx];
+                sn[y] += (ACC)(wv * aperture_scalar_mom_term<T, MOM>(
+                    mom_lens + (cell * N_DENSITY + y) * (2 * NM),
+                    density[d_idx], s, c, idd, uv, ud, udd));
                 sd[y] += (ACC)wv;
             }
         }

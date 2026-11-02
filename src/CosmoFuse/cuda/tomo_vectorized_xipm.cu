@@ -206,3 +206,72 @@ __global__ void gpu_tiled_packed_reduce_xipm(
         packed, shear, weights, bin_offsets[bin_flat], bin_offsets[bin_flat + 1],
         out_num, out_den, nbins_total, bin_flat);
 }
+
+
+/*
+ * Moment-corrected tiles for the coarse bins (cell_moments; pair_tiles.cuh:
+ * tile_xipm_mom).  mom: (n_appended, NS, NM, 2) normalised cell moments;
+ * phi_i / phi_j / inv_d: the coarse pairs' geometry, pair tid of bin b at
+ * mom_base[b] + tid - bin_offsets[b]; mom_base[b] < 0 marks a fine bin, which
+ * is skipped (the plain tiles own it).
+ */
+template<typename T, typename QT, int TOMO_BINS_T, int MOM, typename I, typename ACC>
+__global__ void gpu_tiled_tomo_reduce_xipm_mom(
+    const T* shear,
+    const T* weights,
+    const T* mom,
+    const I* ind_i,
+    const I* ind_j,
+    const QT* phi_i,
+    const QT* phi_j,
+    const QT* inv_d,
+    const long long* bin_offsets,
+    const long long* mom_base,
+    const long long n_active,
+    ACC* out_num,
+    ACC* out_den,
+    const long long nbins_total)
+{
+    const long long bin_flat = (long long)blockIdx.x;
+    if (bin_flat >= nbins_total) return;
+    const long long start = bin_offsets[bin_flat], stop = bin_offsets[bin_flat + 1];
+    const long long mb = mom_base[bin_flat];
+    if (mb < 0 || stop <= start) return;   /* a fine bin: the plain tile owns it */
+    const UnpackedMomentPairs<T, QT, I> pairs = {
+        ind_i, ind_j, phi_i, phi_j, inv_d, mb - start, n_active};
+    tile_xipm_mom<T, TOMO_BINS_T, ACC, UnpackedMomentPairs<T, QT, I>, MOM>(
+        pairs, shear, weights, mom, start, stop, out_num, out_den, nbins_total, bin_flat);
+}
+
+
+/* Packed form: the angle codes of the coarse blocks encode phi (not 2 phi),
+   d_codes the separation d = d_lo[bin] + code * d_scale[bin], and
+   cell_of_row maps a packed row to its cell. */
+template<typename T, int TOMO_BINS_T, int MOM, typename ACC>
+__global__ void gpu_tiled_packed_reduce_xipm_mom(
+    const T* shear,
+    const T* weights,
+    const T* mom,
+    const unsigned short* pairs,
+    const unsigned short* d_codes,
+    const T* d_lo,
+    const T* d_scale,
+    const long long* bin_offsets,
+    const long long* row_base,
+    const long long* mom_base,
+    const int* cell_of_row,
+    ACC* out_num,
+    ACC* out_den,
+    const long long nbins_total)
+{
+    const long long bin_flat = (long long)blockIdx.x;
+    if (bin_flat >= nbins_total) return;
+    const long long start = bin_offsets[bin_flat], stop = bin_offsets[bin_flat + 1];
+    const long long mb = mom_base[bin_flat];
+    if (mb < 0 || stop <= start) return;   /* a fine bin: the plain tile owns it */
+    const PackedMomentPairs<T> packed = {
+        reinterpret_cast<const ushort4*>(pairs), d_codes, row_base[bin_flat],
+        mb - start, d_lo[bin_flat], d_scale[bin_flat], cell_of_row};
+    tile_xipm_mom<T, TOMO_BINS_T, ACC, PackedMomentPairs<T>, MOM>(
+        packed, shear, weights, mom, start, stop, out_num, out_den, nbins_total, bin_flat);
+}

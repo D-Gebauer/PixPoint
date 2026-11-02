@@ -81,3 +81,12 @@ same 56 map-sets at full resolution: max |Δζ| / σ_patch = **1.2e−4** for bo
 ζ_a,+ and ζ_a,−, with ξ± and M_ap shifting by ~2e−4 relative. A float16 map
 archive is therefore free of consequence for the data vector — four orders of
 magnitude below the statistical error.
+
+
+## 8.0.0: moment-carrying cells (2026-11-02)
+
+With `cell_moments="quad"` (the 8.0 default) the ζ_a,− row of the table above becomes
+0.20 σ_patch at k = 2.9 and 0.39 at k = 1.5 (plain: 0.27 and 0.81); ζ_a,+ is unchanged, since
+the moments correct the rotation phase and not the binning.  Reports:
+`results/T10_k{2.9,2,1.5}_quad_vs_fine.md`; numbers and reading in
+`benchmarks/moments/RESULTS.md`, "T10 with moment-carrying cells".

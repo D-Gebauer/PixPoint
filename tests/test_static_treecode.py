@@ -60,6 +60,7 @@ def make_corr(mask, resolution_factor=None, **kwargs) -> Integrated3PCF:
         map_precision="float64",
         rotation_precision="float64",
         resolution_factor=resolution_factor,
+        cell_moments=None,  # the plain cells: these are their gates
     )
     args.update(BIN_ARGS)
     args.update(kwargs)

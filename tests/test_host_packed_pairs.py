@@ -49,6 +49,7 @@ KWARGS = dict(
     map_precision="float64",
     rotation_precision="float64",
     resolution_factor=2.0,
+    cell_moments=None,
 )
 
 

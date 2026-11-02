@@ -8,6 +8,11 @@
 
 #define BLOCK_SIZE 256
 
+/* sin and cos of an angle at the map type (the moment kernels rotate with
+   phi rather than with a stored e^{2i phi}). */
+__device__ __forceinline__ void sincos_t(float a, float* s, float* c) { sincosf(a, s, c); }
+__device__ __forceinline__ void sincos_t(double a, double* s, double* c) { sincos(a, s, c); }
+
 /*
  * Minimal self-contained subset of <cuComplex.h>.
  *

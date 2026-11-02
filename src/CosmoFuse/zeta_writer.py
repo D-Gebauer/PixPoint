@@ -82,6 +82,7 @@ _PROVENANCE_ATTRS = (
     "theta_Q",
     "n_patches",
     "resolution_factor",
+    "cell_moments",
     "aperture_nside",
     "pack_pairs",
     "pack_host_pairs",

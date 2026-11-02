@@ -12,9 +12,21 @@ from ._numba import njit, prange
 from .backend import get_backend, safe_divide
 from .compute_context import ComputeContext
 from .io_handler import PairIOHandler
+from .moments import (
+    MOMENT_ORDERS,
+    N_MOMENTS,
+    cell_frames,
+    cell_moments_numpy,
+    moment_factors,
+    unit_vectors,
+    validate_cell_moments,
+)
 from .packing import (
     block_edges,
     decode_angles,
+    decode_separations,
+    encode_angles_from_phi,
+    encode_separations,
     map_patches,
     pack_patch,
     unpack_rows,
@@ -30,7 +42,7 @@ from .treecode import (
     level_groups,
     validate_resolution_factor,
 )
-from .utils import live_object_serial, select_patch_centers
+from .utils import live_object_serial, pixel2RaDec, select_patch_centers
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +382,7 @@ class Integrated3PCF:
         pair_search_precision: str = "float64",
         pack_pairs: bool = False,
         pack_host_pairs: bool = False,
+        cell_moments: Optional[str] = "quad",
     ) -> None:
         """Initialize the Integrated3PCF class with validation.
 
@@ -445,6 +458,22 @@ class Integrated3PCF:
                 be turned back into one, and both backends measure the
                 quantised estimator.  Pair files written this way carry
                 format version 4.
+            cell_moments: What a coarse treecode cell carries besides its
+                weight sum and weighted mean.  ``"quad"`` (default): the
+                dipole and quadrupole of the weighted shear about the cell
+                centroid, with the shear parallel-transported into the cell
+                frame, so that the pair kernels correct the rotation phase of
+                every child pair to second order in the children's offsets
+                (ξ− and γ_t; ξ+ and w(θ) have no phase) -- the ξ− suppression
+                of the plain treecode (~3 % at k = 4, 10 % at k = 2) and its
+                information loss shrink by 20-50× (RESULTS.md of
+                ``benchmarks/moments``).  ``"dipole"``: first order only
+                (removes the information loss, flips the sign of the mean
+                error; 1.6× instead of 2.2× the coarse-bin kernel cost).
+                ``None``: the plain cells of 7.x.  Inert at full resolution
+                (nothing is allocated or launched); with a treecode the
+                cell rows hold the *transported* mean, which also moves ξ+
+                at the 1e-5 level.  Goes into the provenance either way.
 
         Raises:
             ValueError: If input parameters are invalid
@@ -512,6 +541,7 @@ class Integrated3PCF:
         self.pair_search_precision = pair_search_precision
         self.pack_pairs = bool(pack_pairs)
         self.pack_host_pairs = bool(pack_host_pairs)
+        self.cell_moments = validate_cell_moments(cell_moments)
         self._pair_finder = self._make_pair_finder()
         if self._pair_finder.search_dtype == np.dtype(np.float32):
             jitter = 6e-8 / self.theta_min**2
@@ -573,6 +603,10 @@ class Integrated3PCF:
         # (pack_host_pairs also drops each patch's entry once it is packed).
         self.pair_inds: Optional[List[Any]] = []
         self.pair_exp2phi: Optional[List[Any]] = []
+        # Moment geometry of the coarse-level pairs (cell_moments with a
+        # treecode): full angles (2, n_coarse) and 1/separation per patch.
+        self.pair_phi: Optional[List[Any]] = None
+        self.pair_inv_d: Optional[List[Any]] = None
         self.bins: Optional[List[np.ndarray]] = []
         # Aperture geometry, filled by find_aperture_pairs()/load_pairs().
         # Empty rather than absent: ensure_aperture_pairs() reads Q_inds to
@@ -589,6 +623,9 @@ class Integrated3PCF:
         self.packed_pairs: Optional[List[np.ndarray]] = None
         self.packed_block_ids: Optional[List[np.ndarray]] = None
         self.packed_block_sizes: Optional[List[np.ndarray]] = None
+        # (cell_moments) the separation codes of the coarse pairs of a packed
+        # host payload; their angle codes live in packed_pairs
+        self.packed_inv_d: Optional[List[np.ndarray]] = None
         self.compute_context.initialize_runtime_state()
         self._aperture_filter_active_key = "Q_crittenden"
         self._prepare_failed = False
@@ -1344,14 +1381,50 @@ class Integrated3PCF:
         return self._aperture_shear_rows(g1_arr, g2_arr, w_arr, return_device)
 
     def _aperture_shear_rows(
-        self, g1_arr: Any, g2_arr: Any, w_arr: Any, return_device: bool = True
+        self,
+        g1_arr: Any,
+        g2_arr: Any,
+        w_arr: Any,
+        return_device: bool = True,
+        moments: Optional[Tuple[Any, Any]] = None,
     ) -> Any:
-        """Aperture mass of one map whose virtual rows are already appended."""
+        """Aperture mass of one map whose virtual rows are already appended.
+        ``moments = (mom (n_appended, NM, 2), aperture_filter)`` runs the
+        moment-corrected kernel of a coarse aperture level."""
         kernel = getattr(self.backend, "aperture_shear_kernel", None)
         if kernel is None:
             raise RuntimeError(
                 "Backend does not provide an aperture-shear kernel; "
                 "use a supported backend."
+            )
+
+        if self.backend.name == "numpy" and moments is not None:
+            mom, filter_fn = moments
+            psi, inv_theta, dval, ddval = PairGeometry.aperture_moment_geometry(
+                self, PairGeometry.resolve_aperture_filter(filter_fn)
+            )
+            m_a = np.zeros(self.n_patches, dtype=np.float64)
+            self.backend.aperture_shear_moments_kernel(
+                self._aperture_row_inds(),
+                psi,
+                inv_theta,
+                self.Q_val_flat,
+                dval,
+                ddval,
+                self.Q_offsets,
+                np.asarray(g1_arr),
+                np.asarray(g2_arr),
+                np.asarray(w_arr),
+                np.ascontiguousarray(mom),
+                int(self.n_active),
+                np.asarray(self.Q_patch_area_flat, dtype=np.float64),
+                int(self._aperture_moments),
+                m_a,
+            )
+            return m_a.astype(self.map_dtype)
+        if moments is not None:
+            raise RuntimeError(
+                "moment-carrying aperture cells need the tomographic path"
             )
 
         if self.backend.name == "numpy":
@@ -1459,14 +1532,46 @@ class Integrated3PCF:
         w_arr: Any,
         return_device: bool = True,
         aperture_filter: Optional[Callable[..., Any]] = None,
+        moments: Optional[Any] = None,
     ) -> Any:
         """Scalar aperture of one map whose virtual rows are already appended
-        (``aperture_filter``: see :meth:`m_g`)."""
+        (``aperture_filter``: see :meth:`m_g`; ``moments``: the map's
+        ``(n_appended, NM, 2)`` cell moments for the moment-corrected kernel
+        of a coarse aperture level with a filter)."""
         kernel = getattr(self.backend, "aperture_density_kernel", None)
         if kernel is None:
             raise RuntimeError(
                 "Backend does not provide an aperture-density kernel; "
                 "use a supported backend."
+            )
+
+        if self.backend.name == "numpy" and moments is not None:
+            assert aperture_filter is not None
+            geom = self._k_aperture_geometry(aperture_filter)
+            psi, inv_theta, dval, ddval = PairGeometry.aperture_moment_geometry(
+                self, aperture_filter
+            )
+            m_g = np.zeros(self.n_patches, dtype=np.float64)
+            self.backend.aperture_density_moments_kernel(
+                geom.rows,
+                psi,
+                inv_theta,
+                geom.values,
+                dval,
+                ddval,
+                geom.offsets,
+                np.asarray(map_values_arr),
+                np.asarray(w_arr),
+                np.ascontiguousarray(moments),
+                int(self.n_active),
+                np.asarray(geom.area, dtype=np.float64),
+                int(self._aperture_moments),
+                m_g,
+            )
+            return m_g.astype(self.map_dtype)
+        if moments is not None:
+            raise RuntimeError(
+                "moment-carrying aperture cells need the tomographic path"
             )
 
         if self.backend.name == "numpy":
@@ -1668,6 +1773,28 @@ class Integrated3PCF:
             )
         # free the npix-sized lookup table before the uploads
         lut = None
+        moment_arrays = self._prepare_moment_pairs(
+            bins, first_patch_ind, pack, keep_unpacked, patch_blocks if pack else None
+        )
+        if pack and moment_arrays is not None and not host_packed:
+            # the coarse blocks of the payload carry phi instead of 2 phi
+            b_c = self._first_coarse_bin()
+            codes = moment_arrays["phi_codes"]
+            coarse_start = moment_arrays["coarse_start"]
+            for i in range(self.n_patches):
+                fine = int(np.sum(bins[i][:b_c], dtype=np.int64))
+                lo, hi = int(first_patch_ind[i]) + fine, int(first_patch_ind[i + 1])
+                c0, c1 = int(coarse_start[i]), int(coarse_start[i + 1])
+                packed[lo:hi, 2:] = codes[:, c0:c1].T
+            if keep_unpacked:
+                # the CPU backend rotates with the quantised phi as well
+                phi_q = np.asarray(moment_arrays["phi"], dtype=np.float64)
+                for i in range(self.n_patches):
+                    fine = int(np.sum(bins[i][:b_c], dtype=np.int64))
+                    lo, hi = int(first_patch_ind[i]) + fine, int(first_patch_ind[i + 1])
+                    c0, c1 = int(coarse_start[i]), int(coarse_start[i + 1])
+                    rot = np.exp(2j * phi_q[:, c0:c1])
+                    temp_exp2phi[:, lo:hi] = rot.astype(self.rotation_complex_dtype)
         del patch_blocks
 
         module = self.backend.module
@@ -1715,6 +1842,7 @@ class Integrated3PCF:
             ctx.tot_bins_dev = self.backend.to_device(temp_bins_tot)
         ctx.tot_bins_reduceat_dev = self.backend.to_device(temp_bins_tot)
         self._prepare_aperture_device_buffers()
+        self._upload_moment_pairs(moment_arrays, keep_unpacked)
         ctx.ntotpairs = size
         self.compute_context.prepare_version += 1
         # Published last, so that everything above having succeeded is what
@@ -1727,10 +1855,542 @@ class Integrated3PCF:
         if release_host_pairs:
             self.pair_inds = None
             self.pair_exp2phi = None
+            self.pair_phi = None
+            self.pair_inv_d = None
             self.bins = None
             self.packed_pairs = None
             self.packed_block_ids = None
             self.packed_block_sizes = None
+            self.packed_inv_d = None
+
+    # ── Moment-carrying cells: pair geometry of the coarse bins ──────────────
+
+    def _first_coarse_bin(self) -> int:
+        """Index of the first angular bin measured on a coarse level (the
+        levels get coarser with the bin, so the coarse bins are a contiguous
+        tail); ``nbins`` when every bin is at full resolution."""
+        for b, ns in enumerate(self.level_nside):
+            if int(ns) != int(self.nside):
+                return b
+        return int(self.nbins)
+
+    def _prepare_moment_pairs(
+        self,
+        bins: List[np.ndarray],
+        first_patch_ind: np.ndarray,
+        pack: bool,
+        keep_unpacked: bool,
+        patch_blocks: Optional[List[Optional[List[np.ndarray]]]],
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """Host arrays of the coarse pairs' moment geometry, in the order of
+        the device pair arrays: ``phi (2, n_coarse)``, ``inv_d (n_coarse,)``
+        (quantised like the packed payload when ``pack_pairs`` is on, so both
+        backends measure one estimator), ``mom_base (nbins_total + 1)`` with
+        -1 for the fine bins, and for the packed payload the separation
+        codes with their per-bin decoding and the packed row -> cell map.
+        ``None`` when the pair statistics run without moments."""
+        if not self._pair_moments:
+            return None
+        host_packed = self.packed_pairs is not None
+        if host_packed:
+            if self.packed_inv_d is None:
+                raise RuntimeError(
+                    "cell_moments needs the coarse pairs' geometry, which this "
+                    "packed payload does not carry (packed without cell_moments): "
+                    "re-run find_pairs(), or construct with cell_moments=None."
+                )
+        elif self.pair_phi is None or self.pair_inv_d is None:
+            raise RuntimeError(
+                "cell_moments needs the coarse pairs' angles, which these pairs "
+                "do not carry (a pair file written without cell_moments): re-run "
+                "find_pairs(), or construct with cell_moments=None."
+            )
+        b_c = self._first_coarse_bin()
+        nbins = int(self.nbins)
+        edges = np.asarray(self.binedges, dtype=np.float64)
+        n_coarse = np.zeros(self.n_patches, dtype=np.int64)
+        for i in range(self.n_patches):
+            n_coarse[i] = int(np.sum(bins[i][b_c:], dtype=np.int64))
+        coarse_start = np.concatenate(([0], np.cumsum(n_coarse)))
+        total = int(coarse_start[-1])
+        rot = self.rotation_dtype
+        phi = np.empty((2, total), dtype=rot)
+        inv_d = np.empty(total, dtype=rot)
+        host_codes: Optional[np.ndarray] = None
+        if host_packed:
+            # the payload is quantised already: decode phi and d from the codes
+            assert self.packed_pairs is not None and self.packed_inv_d is not None
+            host_codes = np.empty(total, dtype=np.uint16)
+            unit = 2.0 * np.pi / 65536.0
+            for i in range(self.n_patches):
+                c0, c1 = int(coarse_start[i]), int(coarse_start[i + 1])
+                codes_i = self.packed_inv_d[i]
+                if codes_i is None or codes_i.size != n_coarse[i]:
+                    raise RuntimeError(
+                        "the coarse pairs' separation codes do not match the pair "
+                        f"list (patch {i})"
+                    )
+                fine = int(np.sum(bins[i][:b_c], dtype=np.int64))
+                phi[:, c0:c1] = (
+                    self.packed_pairs[i][fine:, 2:].T.astype(np.float64) * unit
+                ).astype(rot)
+                host_codes[c0:c1] = codes_i
+                run = c0
+                for b in range(b_c, nbins):
+                    n_b = int(bins[i][b])
+                    d = decode_separations(
+                        codes_i[run - c0 : run - c0 + n_b],
+                        float(edges[b]),
+                        float(edges[b + 1]),
+                    )
+                    with np.errstate(divide="ignore"):
+                        inv_d[run : run + n_b] = np.where(d > 0, 1.0 / d, 0.0)
+                    run += n_b
+        else:
+            assert self.pair_phi is not None and self.pair_inv_d is not None
+            for i in range(self.n_patches):
+                if self.pair_phi[i].shape[1] != n_coarse[i]:
+                    raise RuntimeError(
+                        "the coarse pairs' angles do not match the pair list "
+                        f"(patch {i}: {self.pair_phi[i].shape[1]} vs {n_coarse[i]})"
+                    )
+                c0, c1 = int(coarse_start[i]), int(coarse_start[i + 1])
+                phi[:, c0:c1] = self.pair_phi[i]
+                inv_d[c0:c1] = self.pair_inv_d[i]
+        mom_base = np.full(self.n_patches * nbins + 1, -1, dtype=np.int64)
+        d_lo = np.empty(self.n_patches * nbins, dtype=self.map_dtype)
+        d_scale = np.empty(self.n_patches * nbins, dtype=self.map_dtype)
+        d_codes = np.empty(total, dtype=np.uint16) if pack else None
+        for i in range(self.n_patches):
+            c0, c1 = int(coarse_start[i]), int(coarse_start[i + 1])
+            run = c0
+            for b in range(b_c, nbins):
+                mom_base[i * nbins + b] = run
+                run += int(bins[i][b])
+            for b in range(nbins):
+                d_lo[i * nbins + b] = edges[b]
+                d_scale[i * nbins + b] = (edges[b + 1] - edges[b]) / 65535.0
+            if pack:
+                assert d_codes is not None
+                if host_codes is not None:
+                    d_codes[c0:c1] = host_codes[c0:c1]
+                else:
+                    run = c0
+                    for b in range(b_c, nbins):
+                        n_b = int(bins[i][b])
+                        with np.errstate(divide="ignore"):
+                            d = 1.0 / np.asarray(
+                                inv_d[run : run + n_b], dtype=np.float64
+                            )
+                        d_codes[run : run + n_b] = encode_separations(
+                            d, float(edges[b]), float(edges[b + 1])
+                        )
+                        run += n_b
+        out: Dict[str, np.ndarray] = {
+            "phi": phi,
+            "inv_d": inv_d,
+            "mom_base": mom_base,
+            "d_lo": d_lo,
+            "d_scale": d_scale,
+        }
+        if pack:
+            assert d_codes is not None and patch_blocks is not None
+            out["d_codes"] = d_codes
+            # the CPU backend measures the quantised estimator too
+            if keep_unpacked:
+                codes = encode_angles_from_phi(phi)
+                phi_q = np.asarray(codes, dtype=np.float64) * (2.0 * np.pi / 65536.0)
+                out["phi"] = phi_q.astype(rot)
+                inv_q = np.empty_like(inv_d)
+                for i in range(self.n_patches):
+                    run = int(coarse_start[i])
+                    for b in range(b_c, nbins):
+                        n_b = int(bins[i][b])
+                        d = decode_separations(
+                            d_codes[run : run + n_b],
+                            float(edges[b]),
+                            float(edges[b + 1]),
+                        )
+                        with np.errstate(divide="ignore"):
+                            inv_q[run : run + n_b] = np.where(d > 0, 1.0 / d, 0.0)
+                        run += n_b
+                out["inv_d"] = inv_q
+            rows = [blk for blocks in patch_blocks if blocks for blk in blocks]
+            packed_rows = (
+                np.concatenate(rows).astype(np.int64)
+                if rows
+                else np.zeros(0, dtype=np.int64)
+            )
+            out["cell_of_row"] = np.where(
+                packed_rows >= self.n_active, packed_rows - self.n_active, -1
+            ).astype(np.int32)
+            out["phi_codes"] = encode_angles_from_phi(phi)
+            out["coarse_start"] = coarse_start
+        return out
+
+    def _upload_moment_pairs(
+        self, arrays: Optional[Dict[str, np.ndarray]], keep_unpacked: bool
+    ) -> None:
+        ctx = self.compute_context
+        if arrays is None:
+            ctx.moment_phi_dev = None
+            ctx.moment_inv_d_dev = None
+            ctx.moment_base_dev = None
+            ctx.moment_d_codes_dev = None
+            ctx.moment_d_lo_dev = None
+            ctx.moment_d_scale_dev = None
+            ctx.packed_cell_of_row_dev = None
+            ctx.moment_geometry = None
+            return
+        dev = self.backend.to_device
+        ctx.moment_base_dev = dev(arrays["mom_base"])
+        if keep_unpacked:
+            ctx.moment_phi_dev = dev(np.ascontiguousarray(arrays["phi"]))
+            ctx.moment_inv_d_dev = dev(np.ascontiguousarray(arrays["inv_d"]))
+        else:
+            ctx.moment_phi_dev = None
+            ctx.moment_inv_d_dev = None
+        if "d_codes" in arrays:
+            ctx.moment_d_codes_dev = dev(arrays["d_codes"])
+            ctx.moment_d_lo_dev = dev(arrays["d_lo"])
+            ctx.moment_d_scale_dev = dev(arrays["d_scale"])
+            ctx.packed_cell_of_row_dev = dev(arrays["cell_of_row"])
+        else:
+            ctx.moment_d_codes_dev = None
+            ctx.moment_d_lo_dev = None
+            ctx.moment_d_scale_dev = None
+            ctx.packed_cell_of_row_dev = None
+        ctx.moment_geometry = None  # built lazily by _moment_geometry()
+
+    def _moment_geometry(self) -> Dict[str, Any]:
+        """Device geometry of the moment builder: per treecode level the
+        direct pixel -> cell CSR in row space, the cell frames ``(n_tree,
+        9)`` (unit vector, east, north; float64) and the pixel unit vectors
+        ``(n_active, 3)`` at the rotation precision.  Built once per
+        prepared state."""
+        ctx = self.compute_context
+        cached = ctx.moment_geometry
+        if cached is not None:
+            return cast(Dict[str, Any], cached)
+        xp = self.backend.module
+        lut = self._global_to_row_lut()
+        levels = []
+        geoms = []
+        aperture = None
+        ap_cells = self._aperture_cells()
+        if ap_cells is not None:
+            # the aperture level: HEALPix cells at aperture_nside, expansion
+            # point = the coarse pixel centre (where the geometry is evaluated)
+            cell_pix, indptr, child_rows = ap_cells
+            aperture = (
+                xp.asarray(np.asarray(indptr, dtype=np.int64)),
+                xp.asarray(np.asarray(child_rows, dtype=np.int32)),
+                int(cell_pix.size),
+                0,
+                int(cell_pix.size),
+            )
+            ap_geom = xp.asarray(
+                cell_frames(*pixel2RaDec(cell_pix, int(self.aperture_nside or 0)))
+            )
+        tree = self._treecode
+        if tree is not None:
+            starts = tree.level_starts(first=self.n_aperture_cells)
+            for level in range(tree.n_levels):
+                indptr, indices = tree.pixel_children(level)
+                rows = indices if lut is None else lut[indices]
+                if rows.size and int(rows.min()) < 0:
+                    raise ValueError(
+                        "Treecode cells reference pixels outside the mask."
+                    )
+                levels.append(
+                    (
+                        xp.asarray(np.asarray(indptr, dtype=np.int64)),
+                        xp.asarray(np.asarray(rows, dtype=np.int32)),
+                        int(indptr.size - 1),
+                        int(starts[level]),
+                        int(starts[level + 1]),
+                    )
+                )
+                geoms.append(cell_frames(tree.cell_ra[level], tree.cell_dec[level]))
+        ra, dec = pixel2RaDec(np.asarray(self.map_inds, dtype=np.int64), self.nside)
+        out = {
+            "levels": levels,
+            "cell_geom": [xp.asarray(g) for g in geoms],
+            "aperture": aperture,
+            "aperture_geom": ap_geom if ap_cells is not None else None,
+            "pix_xyz": xp.asarray(
+                np.ascontiguousarray(unit_vectors(ra, dec).astype(self.rotation_dtype))
+            ),
+        }
+        ctx.moment_geometry = out
+        return out
+
+    def _expand_moments(
+        self,
+        kind: str,
+        rows: Any,
+        w_rows: Any,
+        layout: str,
+        n_lead: int,
+        order: int,
+        block: str = "pairs",
+    ) -> Any:
+        """Normalised cell moments ``(n_appended, n_lead, NM, 2)`` at map
+        precision for the treecode levels (``block="pairs"``) or the coarse
+        aperture level (``block="aperture"``), from the *pixel rows* of the
+        expanded row buffers (so the sign fold is inherited).
+
+        ``kind``: ``"shear"`` (``rows`` are shear rows: AoS ``(n_rows, n_lead,
+        2)`` or SoA ``(n_lead, 2, n_rows)``; the cell rows of the treecode
+        levels are overwritten with the *transported* mean) or ``"scalar"``
+        (AoS ``(n_rows, n_lead)`` / SoA ``(n_lead, n_rows)``; real moments,
+        imaginary parts zero, rows untouched).  Rows of other blocks (the
+        aperture level) stay zero.  Memoised inside an expansion scope.
+        """
+        memo = getattr(self, "_expansion_memo", None)
+        key = ("mom", kind, id(rows), id(w_rows), layout, n_lead, order, block)
+        if memo is not None:
+            hit = memo.get(key)
+            if hit is not None:
+                return hit[0]
+        xp = self.backend.module if not isinstance(w_rows, np.ndarray) else np
+        nm = N_MOMENTS[order]
+        n_active, n_appended = self.n_active, self.n_appended
+        mom = xp.zeros((n_appended, n_lead, nm, 2), dtype=self.map_dtype)
+        geom = self._moment_geometry()
+        kind_code = 2 if kind == "shear" else 1
+        kernel = self.backend.kernel_moment_level
+        if block == "aperture":
+            if geom["aperture"] is None:
+                raise RuntimeError("no coarse aperture level to build moments for")
+            targets = [(geom["aperture"], geom["aperture_geom"])]
+        else:
+            targets = list(zip(geom["levels"], geom["cell_geom"]))
+        for (indptr, indices, n_cells, start, stop), cell_geom in targets:
+            if n_cells == 0:
+                continue
+            out_mom = mom[start:stop]
+            if self.backend.name == "numpy":
+                if layout == "aos":
+                    w_src = w_rows[:n_active].T
+                    v_src = (
+                        xp.transpose(rows[:n_active], (1, 2, 0))
+                        if kind == "shear"
+                        else rows[:n_active].T[:, None, :]
+                    )
+                else:
+                    w_src = w_rows[:, :n_active]
+                    v_src = (
+                        rows[:, :, :n_active]
+                        if kind == "shear"
+                        else rows[:, None, :n_active]
+                    )
+                out64 = np.zeros((n_cells, n_lead, nm, 2), dtype=np.float64)
+                w64 = np.zeros((n_cells, n_lead), dtype=np.float64)
+                kernel(
+                    np.asarray(indptr, dtype=np.int64),
+                    np.asarray(indices, dtype=np.int32),
+                    np.asarray(cell_geom, dtype=np.float64),
+                    np.asarray(geom["pix_xyz"]),
+                    np.ascontiguousarray(w_src),
+                    np.ascontiguousarray(v_src),
+                    kind_code,
+                    nm,
+                    out64,
+                    w64,
+                )
+                out_mom[...] = out64.astype(self.map_dtype)
+            else:
+                launched = False
+                if kernel is not None:
+                    n_rows = int(
+                        w_rows.shape[0] if layout == "aos" else w_rows.shape[-1]
+                    )
+                    if layout == "aos":
+                        w_desc = (w_rows, 0, 1, 0, n_lead)
+                        v_desc = (
+                            (rows, 0, 2, 1, 2 * n_lead)
+                            if kind == "shear"
+                            else (rows, 0, 1, 0, n_lead)
+                        )
+                    else:
+                        w_desc = (w_rows, 0, n_rows, 0, 1)
+                        v_desc = (
+                            (rows, 0, 2 * n_rows, n_rows, 1)
+                            if kind == "shear"
+                            else (rows, 0, n_rows, 0, 1)
+                        )
+                    out_w = xp.empty((n_cells, n_lead), dtype=self.map_dtype)
+                    launched = bool(
+                        kernel(
+                            indptr,
+                            indices,
+                            cell_geom,
+                            geom["pix_xyz"],
+                            w_desc,
+                            v_desc,
+                            kind_code,
+                            nm,
+                            out_mom,
+                            out_w,
+                        )
+                    )
+                if not launched:
+                    out_mom[...] = xp.asarray(
+                        self._moments_host_fallback(
+                            kind,
+                            rows,
+                            w_rows,
+                            layout,
+                            n_lead,
+                            order,
+                            indptr,
+                            indices,
+                            cell_geom,
+                        )
+                    )
+            if kind == "shear":
+                # the transported mean replaces the plain mean of these cells
+                m = out_mom[:, :, 0, :]  # (n_cells, n_lead, 2)
+                if layout == "aos":
+                    rows[n_active + start : n_active + stop] = m
+                else:
+                    rows[:, :, n_active + start : n_active + stop] = xp.transpose(
+                        m, (1, 2, 0)
+                    )
+        if memo is not None:
+            memo[key] = (mom, rows, w_rows)
+        return mom
+
+    def _moments_host_fallback(
+        self,
+        kind: str,
+        rows: Any,
+        w_rows: Any,
+        layout: str,
+        n_lead: int,
+        order: int,
+        indptr: Any,
+        indices: Any,
+        cell_geom: Any,
+    ) -> np.ndarray:
+        """The moments of one level on the host (``moments.cell_moments_numpy``)
+        for a GPU without a raw compiler."""
+        to_np = self.backend.to_numpy
+        n_active = self.n_active
+        nm = N_MOMENTS[order]
+        indptr_np = np.asarray(to_np(indptr), dtype=np.int64)
+        indices_np = np.asarray(to_np(indices), dtype=np.int64)
+        geom_np = np.asarray(to_np(cell_geom), dtype=np.float64)
+        pix = np.asarray(to_np(self._moment_geometry()["pix_xyz"]), dtype=np.float64)
+        cell = np.repeat(np.arange(indptr_np.size - 1), np.diff(indptr_np))
+        t, dx, dy = moment_factors(geom_np[cell], pix[indices_np])
+        if layout == "aos":
+            w_np = np.asarray(to_np(w_rows[:n_active])).T
+            v_np = np.asarray(to_np(rows[:n_active]))
+            v_np = (
+                np.transpose(v_np, (1, 2, 0)) if kind == "shear" else v_np.T[:, None, :]
+            )
+        else:
+            w_np = np.asarray(to_np(w_rows[:, :n_active]))
+            v_np = np.asarray(to_np(rows[..., :n_active]))
+            v_np = v_np if kind == "shear" else v_np[:, None, :]
+        out = np.zeros((indptr_np.size - 1, n_lead, nm, 2), dtype=np.float64)
+        for lead in range(n_lead):
+            values = (
+                v_np[lead, 0] + 1j * v_np[lead, 1] if kind == "shear" else v_np[lead, 0]
+            )
+            m, W = cell_moments_numpy(
+                indptr_np, indices_np, t, dx, dy, w_np[lead], values, order
+            )
+            inv = np.where(W != 0, 1.0 / np.where(W != 0, W, 1.0), 0.0)
+            out[:, lead, :, 0] = np.real(m) * inv[:, None]
+            out[:, lead, :, 1] = np.imag(m) * inv[:, None]
+        return out.astype(self.map_dtype)
+
+    def _aperture_moment_geometry_dev(
+        self, aperture_filter: Optional[Callable[..., Any]], scalar: bool = False
+    ) -> Tuple[Any, ...]:
+        """Device ``(inds, psi, inv_theta, val, dval, ddval, offsets, area)`` of
+        the aperture moment kernels: the shear discs with Q (``scalar=False``)
+        or with the scalar filter U evaluated on them (``scalar=True``;
+        ``aperture_filter`` is then U).  Cached per filter."""
+        ctx = self.compute_context
+        cache = ctx.__dict__.setdefault("aperture_moment_dev", {})
+        filter_fn = (
+            aperture_filter
+            if scalar
+            else PairGeometry.resolve_aperture_filter(aperture_filter)
+        )
+        assert filter_fn is not None
+        key = (PairGeometry.aperture_filter_key(filter_fn), bool(scalar))
+        hit = cache.get(key)
+        if hit is not None and hit[0] is self.Q_inds_flat:
+            return cast(Tuple[Any, ...], hit[2])
+        psi, inv_theta, dval, ddval = PairGeometry.aperture_moment_geometry(
+            self, filter_fn
+        )
+        if ctx.Q_inds_dev is None:
+            self._prepare_aperture_device_buffers()
+        module = self.backend.module
+
+        def upload(arr: np.ndarray) -> Any:
+            return module.ascontiguousarray(
+                self.backend.to_device(np.asarray(arr, dtype=self.rotation_dtype))
+            )
+
+        if scalar:
+            _inds, val_dev, _offs, _area = self._k_aperture_geometry_dev(filter_fn)
+        else:
+            val_dev = ctx.Q_val_dev
+        out = (
+            ctx.Q_inds_dev,
+            upload(psi),
+            upload(inv_theta),
+            val_dev,
+            upload(dval),
+            upload(ddval),
+            ctx.Q_offsets_dev,
+            ctx.Q_patch_area_dev,
+        )
+        cache[key] = (self.Q_inds_flat, filter_fn, out)
+        return out
+
+    def _aperture_moment_kernel_unavailable_message(self, nzbins: int) -> str:
+        return (
+            f"cell_moments={self.cell_moments!r} on a coarse aperture level needs "
+            "the one-block-per-patch aperture kernel, which keeps the "
+            f"accumulators of every tomographic bin in registers (at most 16 bins; "
+            f"{nzbins} requested). Use fewer bins or construct with "
+            "cell_moments=None."
+        )
+
+    def _moment_pair_geometry(self) -> Tuple[Any, ...]:
+        """The pair-geometry tuple the moment kernels take: unpacked
+        ``(ind_i, ind_j, phi_i, phi_j, inv_d, mom_base)`` or packed ``(pairs,
+        row_base, d_codes, d_lo, d_scale, mom_base, cell_of_row)``."""
+        ctx = self.compute_context
+        if ctx.moment_base_dev is None:
+            raise RuntimeError("the moment pair geometry was not prepared")
+        if ctx.packed_pairs_dev is not None and self.backend.name == "cupy":
+            return (
+                ctx.packed_pairs_dev,
+                ctx.packed_row_base_dev,
+                ctx.moment_d_codes_dev,
+                ctx.moment_d_lo_dev,
+                ctx.moment_d_scale_dev,
+                ctx.moment_base_dev,
+                ctx.packed_cell_of_row_dev,
+            )
+        inds_i, inds_j = self._pair_index_arrays()
+        return (
+            inds_i,
+            inds_j,
+            ctx.moment_phi_dev[0],
+            ctx.moment_phi_dev[1],
+            ctx.moment_inv_d_dev,
+            ctx.moment_base_dev,
+        )
 
     def _ensure_prepared(self) -> None:
         if getattr(self, "_prepare_failed", False):
@@ -2427,6 +3087,26 @@ class Integrated3PCF:
         return 0 if cells is None else int(cells[0].size)
 
     @property
+    def moment_order(self) -> int:
+        """0 (plain cells), 1 (dipole) or 2 (quad): ``cell_moments``."""
+        return MOMENT_ORDERS[getattr(self, "cell_moments", None)]
+
+    @property
+    def _aperture_moments(self) -> int:
+        """The moment order the aperture statistics run with: ``moment_order``
+        on a coarse aperture level (``aperture_nside``), else 0."""
+        return self.moment_order if self.aperture_nside is not None else 0
+
+    @property
+    def _pair_moments(self) -> int:
+        """The moment order the pair statistics run with: ``moment_order``
+        when the treecode has coarse levels, else 0 (nothing to correct)."""
+        tree = self._treecode
+        if tree is None or tree.n_levels == 0:
+            return 0
+        return self.moment_order
+
+    @property
     def n_appended(self) -> int:
         """Number of virtual rows behind the pixel rows.
 
@@ -2451,6 +3131,7 @@ class Integrated3PCF:
         edges_arcmin = np.degrees(np.asarray(self.binedges, dtype=np.float64)) * 60.0
         return {
             "resolution_factor": self.resolution_factor,
+            "cell_moments": self.cell_moments,
             "base_nside": int(self.nside),
             "aperture_nside": int(self.aperture_nside or self.nside),
             "theta_lo_arcmin": edges_arcmin[:-1].copy(),
@@ -3772,6 +4453,12 @@ class Integrated3PCF:
         shear_aos, weights_aos = self._pair_shear_rows(
             shear_maps_dev, w_dev, "pairs", signs=(g1_fac, g2_fac)
         )
+        order = self._pair_moments
+        mom = (
+            self._expand_moments("shear", shear_aos, weights_aos, "aos", nzbins, order)
+            if order
+            else None
+        )
 
         bin_offsets = module.ascontiguousarray(
             self.tot_bins_reduceat_dev.astype(module.int64, copy=False)
@@ -3790,13 +4477,16 @@ class Integrated3PCF:
         )
 
         ctx = self.compute_context
+        shear_in, weights_in = shear_aos, weights_aos
         if ctx.packed_pairs_dev is not None:
             packed_kernel = getattr(self.backend, "xipm_tomo_packed_kernel", None)
             # Gather every patch's rows into its contiguous block.
             perm = ctx.packed_perm_dev
+            shear_in = module.ascontiguousarray(shear_aos[perm])
+            weights_in = module.ascontiguousarray(weights_aos[perm])
             launched = packed_kernel is not None and packed_kernel(
-                module.ascontiguousarray(shear_aos[perm]),
-                module.ascontiguousarray(weights_aos[perm]),
+                shear_in,
+                weights_in,
                 ctx.packed_pairs_dev,
                 bin_offsets,
                 ctx.packed_row_base_dev,
@@ -3827,6 +4517,25 @@ class Integrated3PCF:
             if not launched:
                 return None
 
+        if order:
+            # the coarse bins again, with the moment correction
+            kernel = self.backend.xipm_tomo_moments_kernel
+            ok = kernel is not None and kernel(
+                shear_in,
+                weights_in,
+                mom,
+                self.n_active,
+                self._moment_pair_geometry(),
+                bin_offsets,
+                comb_i,
+                comb_j,
+                order,
+                out_num,
+                out_den,
+            )
+            if not ok:
+                raise RuntimeError(self._moment_kernel_unavailable_message("ξ±"))
+
         return self._finish_xipm_tomo(out_num, out_den, nzbin_combs)
 
     def _xipm_tomo_vectorized_cpu(
@@ -3838,6 +4547,12 @@ class Integrated3PCF:
     ) -> Tuple[Any, Any]:
         # Any sign flip has already been folded into the expansion.
         shear_aos, weights_aos = self._transpose_tomo_inputs_aos(shear_maps_dev, w_dev)
+        order = self._pair_moments
+        mom = (
+            self._expand_moments("shear", shear_aos, weights_aos, "aos", nzbins, order)
+            if order
+            else None
+        )
 
         nbins_total = int(self.tot_bins_reduceat_dev.shape[0] - 1)
         # The numba kernel inherits its accumulator dtype from these arrays.
@@ -3865,6 +4580,27 @@ class Integrated3PCF:
         if launched is False:
             raise RuntimeError(
                 "Backend tomography vectorized kernel unavailable for CPU backend."
+            )
+        if order:
+            ctx = self.compute_context
+            self.backend.xipm_tomo_moments_kernel(
+                shear_aos,
+                weights_aos,
+                mom,
+                int(self.n_active),
+                np.ascontiguousarray(self.inds_dev[0]),
+                np.ascontiguousarray(self.inds_dev[1]),
+                np.ascontiguousarray(ctx.moment_phi_dev[0]),
+                np.ascontiguousarray(ctx.moment_phi_dev[1]),
+                np.ascontiguousarray(ctx.moment_inv_d_dev),
+                np.asarray(ctx.moment_base_dev, dtype=np.int64),
+                offsets,
+                np.ascontiguousarray(comb_i),
+                np.ascontiguousarray(comb_j),
+                int(order),
+                out_num[0],
+                out_num[1],
+                out_w,
             )
         return self._finish_xipm_tomo(out_num, out_w, nzbin_combs)
 
@@ -3938,6 +4674,7 @@ class Integrated3PCF:
             g2_fac = -1
 
         self._ensure_aperture_pairs(aperture_filter=aperture_filter)
+        ap_order = self._aperture_moments
 
         kernel = getattr(self.backend, "aperture_tomo_shear_kernel", None)
         if kernel is not None and self.backend.name == "cupy":
@@ -3960,19 +4697,40 @@ class Integrated3PCF:
             out_den = self.backend.zeros(
                 (nzbins, self.n_patches), dtype=map_backend_dtype
             )
-            launched = kernel(
-                shear_rows[:, 0],  # views; both strides passed explicitly
-                shear_rows[:, 1],
-                w_rows,
-                ctx.Q_inds_dev,
-                ctx.Q_cos_dev,
-                ctx.Q_sin_dev,
-                ctx.Q_val_dev,
-                ctx.Q_offsets_dev,
-                ctx.Q_patch_area_dev,
-                out_num,
-                out_den,
-            )
+            if ap_order:
+                mom = self._expand_moments(
+                    "shear", shear_rows, w_rows, "soa", nzbins, ap_order, "aperture"
+                )
+                mom_kernel = self.backend.aperture_tomo_moments_kernel
+                launched = mom_kernel is not None and mom_kernel(
+                    "shear",
+                    (shear_rows[:, 0], shear_rows[:, 1]),
+                    w_rows,
+                    mom,
+                    self.n_active,
+                    self._aperture_moment_geometry_dev(aperture_filter),
+                    ap_order,
+                    out_num,
+                    out_den,
+                )
+                if not launched:
+                    raise RuntimeError(
+                        self._aperture_moment_kernel_unavailable_message(nzbins)
+                    )
+            else:
+                launched = kernel(
+                    shear_rows[:, 0],  # views; both strides passed explicitly
+                    shear_rows[:, 1],
+                    w_rows,
+                    ctx.Q_inds_dev,
+                    ctx.Q_cos_dev,
+                    ctx.Q_sin_dev,
+                    ctx.Q_val_dev,
+                    ctx.Q_offsets_dev,
+                    ctx.Q_patch_area_dev,
+                    out_num,
+                    out_den,
+                )
             if launched:
                 # Numerator is already area-scaled inside the kernel.
                 M_a = self._normalize_by_weights(out_num, out_den)
@@ -3992,12 +4750,20 @@ class Integrated3PCF:
         shear_rows, w_rows = self._expand_shear_rows(
             shear_maps_arr, w_arr, blocks="aperture", signs=(g1_fac, g2_fac)
         )
+        mom = (
+            self._expand_moments(
+                "shear", shear_rows, w_rows, "soa", nzbins, ap_order, "aperture"
+            )
+            if ap_order
+            else None
+        )
         for i in range(nzbins):
             M_a[i] = self._aperture_shear_rows(
                 shear_rows[i, 0],
                 shear_rows[i, 1],
                 w_rows[i],
                 return_device=keep_on_device,
+                moments=None if mom is None else (mom[:, i], aperture_filter),
             )
         return M_a
 
@@ -4028,6 +4794,8 @@ class Integrated3PCF:
         w_arr = self._coerce_map_input_array(w)
 
         self._k_aperture_geometry(aperture_filter)  # builds the geometry if needed
+        # the patch mean has a constant filter: nothing to correct
+        ap_order = self._aperture_moments if aperture_filter is not None else 0
 
         kernel = getattr(self.backend, "aperture_tomo_density_kernel", None)
         if kernel is not None and self.backend.name == "cupy":
@@ -4048,16 +4816,37 @@ class Integrated3PCF:
             out_den = self.backend.zeros(
                 (nzbins, self.n_patches), dtype=map_backend_dtype
             )
-            launched = kernel(
-                density_rows,
-                w_rows,
-                k_inds,
-                k_val,
-                k_offsets,
-                k_area,
-                out_num,
-                out_den,
-            )
+            if ap_order:
+                mom = self._expand_moments(
+                    "scalar", density_rows, w_rows, "soa", nzbins, ap_order, "aperture"
+                )
+                mom_kernel = self.backend.aperture_tomo_moments_kernel
+                launched = mom_kernel is not None and mom_kernel(
+                    "scalar",
+                    (density_rows,),
+                    w_rows,
+                    mom,
+                    self.n_active,
+                    self._aperture_moment_geometry_dev(aperture_filter, scalar=True),
+                    ap_order,
+                    out_num,
+                    out_den,
+                )
+                if not launched:
+                    raise RuntimeError(
+                        self._aperture_moment_kernel_unavailable_message(nzbins)
+                    )
+            else:
+                launched = kernel(
+                    density_rows,
+                    w_rows,
+                    k_inds,
+                    k_val,
+                    k_offsets,
+                    k_area,
+                    out_num,
+                    out_den,
+                )
             if launched:
                 # Numerator is already area-scaled inside the kernel.
                 M_g = self._normalize_by_weights(out_num, out_den)
@@ -4077,12 +4866,26 @@ class Integrated3PCF:
         (density_rows,), w_rows = self._expand_rows(
             (density_arr,), w_arr, blocks="aperture"
         )
+        mom = (
+            self._expand_moments(
+                "scalar",
+                density_rows,
+                w_rows,
+                "soa",
+                int(density_arr.shape[0]),
+                ap_order,
+                "aperture",
+            )
+            if ap_order
+            else None
+        )
         for i in range(density_arr.shape[0]):
             M_g[i] = self._aperture_density_rows(
                 density_rows[i],
                 w_rows[i],
                 return_device=keep_on_device,
                 aperture_filter=aperture_filter,
+                moments=None if mom is None else mom[:, i],
             )
         return M_g
 
@@ -4385,6 +5188,18 @@ class Integrated3PCF:
         shear_soa, shear_w_soa = self._pair_shear_rows(
             shear_dev, shear_w_dev, "pairs", signs=shear_signs
         )
+        # (AoS buffers despite the names; the lens cells' real moments and
+        # the source cells' transported ones, when the treecode has coarse
+        # levels -- the shear cell rows then hold the transported mean)
+        order = self._pair_moments
+        mom_lens = mom_src = None
+        if order:
+            mom_lens = self._expand_moments(
+                "scalar", density_soa, density_w_soa, "aos", nlens_bins, order
+            )
+            mom_src = self._expand_moments(
+                "shear", shear_soa, shear_w_soa, "aos", nsource_bins, order
+            )
 
         comb_i_base, comb_j_base, nzbin_combs = (
             self._get_selected_tomo_cross_combination_indices(
@@ -4419,6 +5234,29 @@ class Integrated3PCF:
                 out_num,
                 out_den,
             )
+            if order:
+                ctx = self.compute_context
+                self.backend.kernel_density_shear_tomo_moments(
+                    density_soa,
+                    shear_soa,
+                    density_w_soa,
+                    shear_w_soa,
+                    mom_lens,
+                    mom_src,
+                    int(self.n_active),
+                    np.ascontiguousarray(self.inds_dev[0]),
+                    np.ascontiguousarray(self.inds_dev[1]),
+                    np.ascontiguousarray(ctx.moment_phi_dev[0]),
+                    np.ascontiguousarray(ctx.moment_phi_dev[1]),
+                    np.ascontiguousarray(ctx.moment_inv_d_dev),
+                    np.asarray(ctx.moment_base_dev, dtype=np.int64),
+                    np.asarray(bin_offsets, dtype=np.int64),
+                    np.ascontiguousarray(comb_i),
+                    np.ascontiguousarray(comb_j),
+                    int(order),
+                    out_num,
+                    out_den,
+                )
         else:
             # Allocated at the accumulation dtype: the kernel reduces into them.
             out_num = self.backend.zeros(
@@ -4428,16 +5266,26 @@ class Integrated3PCF:
                 (nzbin_combs, nbins_total), dtype=acc_backend_dtype
             )
             ctx = self.compute_context
+            d_in, s_in, dw_in, sw_in = (
+                density_soa,
+                shear_soa,
+                density_w_soa,
+                shear_w_soa,
+            )
             if ctx.packed_pairs_dev is not None:
                 packed_kernel = getattr(
                     self.backend, "kernel_density_shear_tomo_packed", None
                 )
                 perm = ctx.packed_perm_dev
+                d_in = module.ascontiguousarray(density_soa[perm])
+                s_in = module.ascontiguousarray(shear_soa[perm])
+                dw_in = module.ascontiguousarray(density_w_soa[perm])
+                sw_in = module.ascontiguousarray(shear_w_soa[perm])
                 launched = packed_kernel is not None and packed_kernel(
-                    module.ascontiguousarray(density_soa[perm]),
-                    module.ascontiguousarray(shear_soa[perm]),
-                    module.ascontiguousarray(density_w_soa[perm]),
-                    module.ascontiguousarray(shear_w_soa[perm]),
+                    d_in,
+                    s_in,
+                    dw_in,
+                    sw_in,
                     ctx.packed_pairs_dev,
                     bin_offsets,
                     ctx.packed_row_base_dev,
@@ -4476,6 +5324,26 @@ class Integrated3PCF:
                         else "Backend declined vectorized density-shear "
                         "tomography kernel launch."
                     )
+            if order:
+                kernel = self.backend.kernel_density_shear_tomo_moments
+                ok = kernel is not None and kernel(
+                    d_in,
+                    s_in,
+                    dw_in,
+                    sw_in,
+                    mom_lens,
+                    mom_src,
+                    self.n_active,
+                    self._moment_pair_geometry(),
+                    bin_offsets,
+                    comb_i,
+                    comb_j,
+                    order,
+                    out_num,
+                    out_den,
+                )
+                if not ok:
+                    raise RuntimeError(self._moment_kernel_unavailable_message("ξ_t"))
 
         num_ab = out_num
 
@@ -4752,6 +5620,15 @@ class Integrated3PCF:
         )
 
         if not on_gpu:
+            order = self._pair_moments
+            mom_lens = mom_src = None
+            if order:
+                mom_lens = self._expand_moments(
+                    "scalar", density_soa, density_w_soa, "aos", n_density_bins, order
+                )
+                mom_src = self._expand_moments(
+                    "shear", shear_soa, shear_w_soa, "aos", n_shear_bins, order
+                )
             fused_kernel(
                 np.ascontiguousarray(density_soa),
                 np.ascontiguousarray(shear_soa),
@@ -4790,35 +5667,152 @@ class Integrated3PCF:
                 out_xit_num,
                 out_xit_den,
             )
+            ap_order = self._aperture_moments
+            if ap_order:
+                self._fused_aperture_moments_cpu(
+                    shear_soa,
+                    shear_w_soa,
+                    density_soa,
+                    density_w_soa,
+                    aperture_filter,
+                    k_aperture_filter,
+                    ap_order,
+                    out_ma_num,
+                    out_ma_den,
+                    out_mg_num,
+                    out_mg_den,
+                )
+            if order:
+                ctx = self.compute_context
+                geom_args = (
+                    int(self.n_active),
+                    np.ascontiguousarray(self.inds_dev[0]),
+                    np.ascontiguousarray(self.inds_dev[1]),
+                    np.ascontiguousarray(ctx.moment_phi_dev[0]),
+                    np.ascontiguousarray(ctx.moment_phi_dev[1]),
+                    np.ascontiguousarray(ctx.moment_inv_d_dev),
+                    np.asarray(ctx.moment_base_dev, dtype=np.int64),
+                    np.ascontiguousarray(pair_offsets),
+                )
+                self.backend.xipm_tomo_moments_kernel(
+                    np.ascontiguousarray(shear_soa),
+                    np.ascontiguousarray(shear_w_soa),
+                    mom_src,
+                    *geom_args,
+                    np.ascontiguousarray(ss_comb_i),
+                    np.ascontiguousarray(ss_comb_j),
+                    int(order),
+                    out_xipm_num[0],
+                    out_xipm_num[1],
+                    out_xipm_den,
+                )
+                self.backend.kernel_density_shear_tomo_moments(
+                    np.ascontiguousarray(density_soa),
+                    np.ascontiguousarray(shear_soa),
+                    np.ascontiguousarray(density_w_soa),
+                    np.ascontiguousarray(shear_w_soa),
+                    mom_lens,
+                    mom_src,
+                    *geom_args,
+                    np.ascontiguousarray(ds_comb_i),
+                    np.ascontiguousarray(ds_comb_j),
+                    int(order),
+                    out_xit_num,
+                    out_xit_den,
+                )
         else:
             # Aperture sections (ACC accumulation) on the AoS inputs, then the
             # three pair statistics in the combination-tiled pair kernels --
             # the same kernels as the standalone tomographic methods, so the
             # packed geometry is supported here too.
-            launched = aperture_kernel(
-                density_soa,
-                shear_soa,
-                density_w_soa,
-                shear_w_soa,
-                q_inds,
-                q_cos,
-                q_sin,
-                q_val,
-                q_offsets,
-                q_patch_area,
-                k_inds,
-                k_val,
-                k_offsets,
-                k_area,
-                out_ma_num,
-                out_ma_den,
-                out_mg_num,
-                out_mg_den,
-            )
-            if not launched:
-                raise RuntimeError(
-                    "Backend declined fused 3x2pt aperture kernel launch."
+            ap_order = self._aperture_moments
+            if ap_order:
+                mom_src = self._expand_moments(
+                    "shear",
+                    shear_soa,
+                    shear_w_soa,
+                    "aos",
+                    n_shear_bins,
+                    ap_order,
+                    "aperture",
                 )
+                mom_lens = self._expand_moments(
+                    "scalar",
+                    density_soa,
+                    density_w_soa,
+                    "aos",
+                    n_density_bins,
+                    ap_order,
+                    "aperture",
+                )
+                q_geom = self._aperture_moment_geometry_dev(aperture_filter)
+                if k_aperture_filter is None:
+                    # the patch mean: a constant filter, nothing to correct
+                    zeros = module.zeros(int(k_inds.shape[0]), dtype=k_val.dtype)
+                    k_geom = (
+                        k_inds,
+                        zeros,
+                        zeros,
+                        k_val,
+                        zeros,
+                        zeros,
+                        k_offsets,
+                        k_area,
+                    )
+                else:
+                    k_geom = self._aperture_moment_geometry_dev(
+                        k_aperture_filter, scalar=True
+                    )
+                mom_kernel = getattr(
+                    self.backend, "kernel_3x2pt_aperture_moments", None
+                )
+                launched = mom_kernel is not None and mom_kernel(
+                    density_soa,
+                    shear_soa,
+                    density_w_soa,
+                    shear_w_soa,
+                    mom_lens,
+                    mom_src,
+                    self.n_active,
+                    q_geom,
+                    k_geom,
+                    ap_order,
+                    out_ma_num,
+                    out_ma_den,
+                    out_mg_num,
+                    out_mg_den,
+                )
+                if not launched:
+                    raise RuntimeError(
+                        self._aperture_moment_kernel_unavailable_message(
+                            max(n_shear_bins, n_density_bins)
+                        )
+                    )
+            else:
+                launched = aperture_kernel(
+                    density_soa,
+                    shear_soa,
+                    density_w_soa,
+                    shear_w_soa,
+                    q_inds,
+                    q_cos,
+                    q_sin,
+                    q_val,
+                    q_offsets,
+                    q_patch_area,
+                    k_inds,
+                    k_val,
+                    k_offsets,
+                    k_area,
+                    out_ma_num,
+                    out_ma_den,
+                    out_mg_num,
+                    out_mg_den,
+                )
+                if not launched:
+                    raise RuntimeError(
+                        "Backend declined fused 3x2pt aperture kernel launch."
+                    )
             self._launch_3x2pt_pair_kernels(
                 density_soa,
                 shear_soa,
@@ -4908,6 +5902,53 @@ class Integrated3PCF:
 
         return M_a, M_g, xip, xim, xi_g, xi_t
 
+    def _fused_aperture_moments_cpu(
+        self,
+        shear_aos: Any,
+        shear_w_aos: Any,
+        density_aos: Any,
+        density_w_aos: Any,
+        aperture_filter: Optional[Callable[..., Any]],
+        k_aperture_filter: Optional[Callable[..., Any]],
+        order: int,
+        out_ma_num: Any,
+        out_ma_den: Any,
+        out_mg_num: Any,
+        out_mg_den: Any,
+    ) -> None:
+        """The aperture sections of the CPU fused path again, with the moment
+        correction of a coarse aperture level (the plain kernel's sums are
+        overwritten; the normalisation reads ``num / den``)."""
+        n_shear = int(shear_aos.shape[1])
+        n_density = int(density_aos.shape[1])
+        mom_src = self._expand_moments(
+            "shear", shear_aos, shear_w_aos, "aos", n_shear, order, "aperture"
+        )
+        for z in range(n_shear):
+            m_a = self._aperture_shear_rows(
+                np.ascontiguousarray(shear_aos[:, z, 0]),
+                np.ascontiguousarray(shear_aos[:, z, 1]),
+                np.ascontiguousarray(shear_w_aos[:, z]),
+                return_device=False,
+                moments=(mom_src[:, z], aperture_filter),
+            )
+            # the kernel's normalisation divides num by den: keep den
+            out_ma_num[z] = np.asarray(m_a, dtype=out_ma_num.dtype) * out_ma_den[z]
+        if k_aperture_filter is None:
+            return  # the patch mean: a constant filter, nothing to correct
+        mom_lens = self._expand_moments(
+            "scalar", density_aos, density_w_aos, "aos", n_density, order, "aperture"
+        )
+        for z in range(n_density):
+            m_g = self._aperture_density_rows(
+                np.ascontiguousarray(density_aos[:, z]),
+                np.ascontiguousarray(density_w_aos[:, z]),
+                return_device=False,
+                aperture_filter=k_aperture_filter,
+                moments=mom_lens[:, z],
+            )
+            out_mg_num[z] = np.asarray(m_g, dtype=out_mg_num.dtype) * out_mg_den[z]
+
     def _launch_3x2pt_pair_kernels(
         self,
         density_aos: Any,
@@ -4933,6 +5974,16 @@ class Integrated3PCF:
         module = self.backend.module
         ctx = self.compute_context
         backend = self.backend
+        order = self._pair_moments
+        mom_lens = mom_src = None
+        if order:
+            n_density, n_shear = int(density_aos.shape[1]), int(shear_aos.shape[1])
+            mom_lens = self._expand_moments(
+                "scalar", density_aos, density_w_aos, "aos", n_density, order
+            )
+            mom_src = self._expand_moments(
+                "shear", shear_aos, shear_w_aos, "aos", n_shear, order
+            )
         packed = ctx.packed_pairs_dev is not None
         if packed:
             perm = ctx.packed_perm_dev
@@ -5032,6 +6083,26 @@ class Integrated3PCF:
                     "A packed pair kernel is unavailable for this tomographic "
                     "configuration; use pack_pairs=False."
                 )
+            if order:
+                self._launch_3x2pt_moment_kernels(
+                    density_aos,
+                    shear_aos,
+                    density_w_aos,
+                    shear_w_aos,
+                    mom_lens,
+                    mom_src,
+                    pair_offsets,
+                    (ss_comb_i, ss_comb_j),
+                    (dd_comb_i, dd_comb_j),
+                    (ds_comb_i, ds_comb_j),
+                    order,
+                    out_xipm_num,
+                    out_xipm_den,
+                    out_xig_num,
+                    out_xig_den,
+                    out_xit_num,
+                    out_xit_den,
+                )
             return
 
         inds_i, inds_j, rot_i, rot_j = geometry
@@ -5076,6 +6147,131 @@ class Integrated3PCF:
         )
         if not (ok_ss and ok_dd and ok_ds):
             raise RuntimeError("Backend declined a 3x2pt pair kernel launch.")
+        if order:
+            self._launch_3x2pt_moment_kernels(
+                density_aos,
+                shear_aos,
+                density_w_aos,
+                shear_w_aos,
+                mom_lens,
+                mom_src,
+                pair_offsets,
+                (ss_comb_i, ss_comb_j),
+                (dd_comb_i, dd_comb_j),
+                (ds_comb_i, ds_comb_j),
+                order,
+                out_xipm_num,
+                out_xipm_den,
+                out_xig_num,
+                out_xig_den,
+                out_xit_num,
+                out_xit_den,
+            )
+
+    def _launch_3x2pt_moment_kernels(
+        self,
+        density_aos: Any,
+        shear_aos: Any,
+        density_w_aos: Any,
+        shear_w_aos: Any,
+        mom_lens: Any,
+        mom_src: Any,
+        pair_offsets: Any,
+        ss_comb: Tuple[Any, Any],
+        dd_comb: Tuple[Any, Any],
+        ds_comb: Tuple[Any, Any],
+        order: int,
+        out_xipm_num: Any,
+        out_xipm_den: Any,
+        out_xig_num: Any,
+        out_xig_den: Any,
+        out_xit_num: Any,
+        out_xit_den: Any,
+    ) -> None:
+        """The coarse bins of the fused 3x2pt path again, with the moment
+        correction: one multi-statistic tile while it fits the register
+        budget, else the standalone xi+- and xi_t moment tiles."""
+        from .backend.combinations import _MAX_TILED_3X2PT_ACCUMULATORS
+
+        backend = self.backend
+        geometry = self._moment_pair_geometry()
+        multi = getattr(backend, "kernel_3x2pt_tomo_moments", None)
+        pairs_wrapper = getattr(backend, "kernel_3x2pt_tomo_pairs", None)
+        # the single-pass budget and mode of the plain tile apply here too
+        budget = getattr(pairs_wrapper, "max_accumulators", None)
+        if budget is None:
+            budget = _MAX_TILED_3X2PT_ACCUMULATORS
+        mode = getattr(pairs_wrapper, "mode", "auto")
+        if mode == "single":
+            budget = 1 << 30
+        if mode != "off" and multi is not None and budget > 0:
+            if multi(
+                density_aos,
+                shear_aos,
+                density_w_aos,
+                shear_w_aos,
+                mom_lens,
+                mom_src,
+                self.n_active,
+                geometry,
+                pair_offsets,
+                ss_comb,
+                dd_comb,
+                ds_comb,
+                order,
+                budget,
+                out_xipm_num,
+                out_xipm_den,
+                out_xig_num,
+                out_xig_den,
+                out_xit_num,
+                out_xit_den,
+            ):
+                return
+        ss = backend.xipm_tomo_moments_kernel
+        ds = backend.kernel_density_shear_tomo_moments
+        ok_ss = ss is not None and ss(
+            shear_aos,
+            shear_w_aos,
+            mom_src,
+            self.n_active,
+            geometry,
+            pair_offsets,
+            ss_comb[0],
+            ss_comb[1],
+            order,
+            out_xipm_num,
+            out_xipm_den,
+        )
+        ok_ds = ds is not None and ds(
+            density_aos,
+            shear_aos,
+            density_w_aos,
+            shear_w_aos,
+            mom_lens,
+            mom_src,
+            self.n_active,
+            geometry,
+            pair_offsets,
+            ds_comb[0],
+            ds_comb[1],
+            order,
+            out_xit_num,
+            out_xit_den,
+        )
+        if not (ok_ss and ok_ds):
+            raise RuntimeError(self._moment_kernel_unavailable_message("3x2pt"))
+
+    def _moment_kernel_unavailable_message(self, statistic: str) -> str:
+        from .backend.combinations import _MAX_TILED_ACCUMULATORS
+
+        return (
+            f"cell_moments={self.cell_moments!r} needs the combination-tiled "
+            f"{statistic} kernel (every accumulator in a register, at most "
+            f"{_MAX_TILED_ACCUMULATORS} per thread), which this tomographic "
+            "configuration exceeds, or a backend without the moment kernels. "
+            "Use fewer tomographic bins or construct with cell_moments=None."
+        )
 
     def _three_by_two_pt_arrays(
         self,

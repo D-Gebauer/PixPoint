@@ -266,3 +266,171 @@ __global__ void gpu_aperture_density_tomo_fused(
         }
     }
 }
+
+
+/*
+ * ── Moment-carrying aperture cells (cell_moments with aperture_nside) ────
+ *
+ * A disc cell c = q_inds[idx] - n_active carries, per tomographic bin, the
+ * normalised moments mom[((c*NZ + z)*NM + k)*2 + {re, im}] of its children
+ * about the coarse pixel centre (shear: transported into the cell frame,
+ * k = [M, dx, dy, (xx, xy, yy)]; scalar: real).  The aperture is the gamma_t
+ * pair statistic between the centre (a point) and the cell, so with psi the
+ * position angle of the centre seen from the cell (east -> north; the stored
+ * bearing phi is pi - psi, e^{-2i phi} = e^{2i psi}), d = theta_c and the
+ * transported unit vectors p = (sin psi, -cos psi), q = (-cos psi, -sin psi):
+ *
+ *   sum_p w gamma_t Q(theta_p) = -Re{ e^{2i psi} [ Q F_pt + Q' (Dq + 2iS/d Qqp)
+ *                                 + Q'' Qqq / 2 + (Q'/d) Qpp / 2 ] },
+ *   F_pt = M - 2iS/d Dp - 2/d^2 Qpp + 2iS/d^2 Qqp,   S = -1,
+ *   sum_p w f U(theta_p)        = U M + U' Dq + U'' Qqq / 2 + (U'/d) Qpp / 2.
+ *
+ * See CosmoFuse/moments.py (aperture_shear_terms, aperture_scalar_terms).
+ * The row buffers hold W and, for shear with moments on, the transported
+ * mean, which is the M above.  One block per patch, NZ bins inside it (the
+ * fused form only; the moments are a library feature, not a 4.20 path).
+ */
+
+__APERTURE_MOMENTS_CUDA_SOURCE__
+
+template<typename T, typename QT, int NZ, int MOM>
+__global__ void gpu_aperture_shear_tomo_mom(
+    const T* g1,                 /* base ptr, bin b at g1 + b*g_stride  */
+    const T* g2,
+    const long long g_stride,
+    const long long g_elem,
+    const T* weights,
+    const long long w_stride,
+    const long long w_elem,
+    const T* mom,                /* (n_appended, NZ, NM, 2)             */
+    const long long n_active,
+    const unsigned int* q_inds,
+    const QT* q_phi,             /* psi: centre seen from the cell      */
+    const QT* q_inv_theta,
+    const QT* q_val,
+    const QT* q_dval,
+    const QT* q_ddval,
+    const long long* q_offsets,
+    const QT* q_patch_area,
+    T* out_num,                  /* [NZ x npatches] */
+    T* out_den,
+    const int npatches)
+{
+    enum { NM = (MOM >= 2) ? 6 : 3 };
+    const int lane = (int)threadIdx.x;
+    const int patch = (int)blockIdx.x;
+    if (patch >= npatches) return;
+
+    const long long start = q_offsets[patch];
+    const long long stop  = q_offsets[patch + 1];
+
+    T sn[NZ];
+    T sd[NZ];
+#pragma unroll
+    for (int b = 0; b < NZ; ++b) { sn[b] = (T)0.0; sd[b] = (T)0.0; }
+
+    for (long long idx = start + lane; idx < stop; idx += BLOCK_SIZE) {
+        const long long pix = (long long)q_inds[idx];
+        const long long cell = pix - n_active;
+        T s, c;
+        sincos_t((T)q_phi[idx], &s, &c);
+        const T idd = (T)q_inv_theta[idx];
+        const T qv = (T)q_val[idx];
+        const T qd = (T)q_dval[idx];
+        const T qdd = (T)q_ddval[idx];
+#pragma unroll
+        for (int b = 0; b < NZ; ++b) {
+            const T wv = weights[(long long)b * w_stride + pix * w_elem];
+            const T m_r = g1[(long long)b * g_stride + pix * g_elem];
+            const T m_i = g2[(long long)b * g_stride + pix * g_elem];
+            sn[b] += wv * aperture_shear_mom_term<T, MOM>(
+                mom + (cell * NZ + b) * (2 * NM), m_r, m_i, s, c, idd, qv, qd, qdd);
+            sd[b] += wv;
+        }
+    }
+
+    __shared__ T s1[BLOCK_SIZE];
+    __shared__ T s2[BLOCK_SIZE];
+    const T area = (T)q_patch_area[patch];
+#pragma unroll
+    for (int b = 0; b < NZ; ++b) {
+        T n, d;
+        __syncthreads();
+        block_reduce_sum_pair_into(sn[b], sd[b], s1, s2, &n, &d);
+        if (lane == 0) {
+            const long long o = (long long)b * npatches + patch;
+            out_num[o] = area * n;
+            out_den[o] = d;
+        }
+    }
+}
+
+template<typename T, typename QT, int NZ, int MOM>
+__global__ void gpu_aperture_density_tomo_mom(
+    const T* values,
+    const long long v_stride,
+    const long long v_elem,
+    const T* weights,
+    const long long w_stride,
+    const long long w_elem,
+    const T* mom,                /* (n_appended, NZ, NM, 2), real parts */
+    const long long n_active,
+    const unsigned int* q_inds,
+    const QT* q_phi,
+    const QT* q_inv_theta,
+    const QT* q_val,
+    const QT* q_dval,
+    const QT* q_ddval,
+    const long long* q_offsets,
+    const QT* q_patch_area,
+    T* out_num,
+    T* out_den,
+    const int npatches)
+{
+    enum { NM = (MOM >= 2) ? 6 : 3 };
+    const int lane = (int)threadIdx.x;
+    const int patch = (int)blockIdx.x;
+    if (patch >= npatches) return;
+
+    const long long start = q_offsets[patch];
+    const long long stop  = q_offsets[patch + 1];
+
+    T sn[NZ];
+    T sd[NZ];
+#pragma unroll
+    for (int b = 0; b < NZ; ++b) { sn[b] = (T)0.0; sd[b] = (T)0.0; }
+
+    for (long long idx = start + lane; idx < stop; idx += BLOCK_SIZE) {
+        const long long pix = (long long)q_inds[idx];
+        const long long cell = pix - n_active;
+        T s, c;
+        sincos_t((T)q_phi[idx], &s, &c);
+        const T idd = (T)q_inv_theta[idx];
+        const T uv = (T)q_val[idx];
+        const T ud = (T)q_dval[idx];
+        const T udd = (T)q_ddval[idx];
+#pragma unroll
+        for (int b = 0; b < NZ; ++b) {
+            const T wv = weights[(long long)b * w_stride + pix * w_elem];
+            const T m = values[(long long)b * v_stride + pix * v_elem];
+            sn[b] += wv * aperture_scalar_mom_term<T, MOM>(
+                mom + (cell * NZ + b) * (2 * NM), m, s, c, idd, uv, ud, udd);
+            sd[b] += wv;
+        }
+    }
+
+    __shared__ T s1[BLOCK_SIZE];
+    __shared__ T s2[BLOCK_SIZE];
+    const T area = (T)q_patch_area[patch];
+#pragma unroll
+    for (int b = 0; b < NZ; ++b) {
+        T n, d;
+        __syncthreads();
+        block_reduce_sum_pair_into(sn[b], sd[b], s1, s2, &n, &d);
+        if (lane == 0) {
+            const long long o = (long long)b * npatches + patch;
+            out_num[o] = area * n;
+            out_den[o] = d;
+        }
+    }
+}

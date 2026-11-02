@@ -32,6 +32,7 @@ def make_corr():
         device="cpu",
         rotation_precision="float64",
         resolution_factor=2.0,
+        cell_moments=None,
     )
     corr.preprocess()
     return corr, mask

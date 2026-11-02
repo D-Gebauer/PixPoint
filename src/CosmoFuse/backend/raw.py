@@ -50,11 +50,15 @@ def _load_cuda_source_file(filename: str) -> str:
 
 _COMMON_CUDA_SOURCE = _load_cuda_source_file("common.cuh")
 _PAIR_TILES_CUDA_SOURCE = _load_cuda_source_file("pair_tiles.cuh")
+_APERTURE_MOMENTS_CUDA_SOURCE = _load_cuda_source_file("aperture_moments.cuh")
 
 
 def _prepare_cuda_source(filename: str) -> str:
     source = _load_cuda_source_file(filename)
     source = source.replace("__COMMON_CUDA_SOURCE__", _COMMON_CUDA_SOURCE)
+    source = source.replace(
+        "__APERTURE_MOMENTS_CUDA_SOURCE__", _APERTURE_MOMENTS_CUDA_SOURCE
+    )
     return source.replace("__PAIR_TILES_CUDA_SOURCE__", _PAIR_TILES_CUDA_SOURCE)
 
 

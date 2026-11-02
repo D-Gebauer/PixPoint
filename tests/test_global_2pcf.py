@@ -56,7 +56,11 @@ def _setup():
 
 def _kw(**extra):
     kw = dict(
-        device="cpu", map_precision="float64", rotation_precision="float64", **BINS
+        device="cpu",
+        map_precision="float64",
+        rotation_precision="float64",
+        cell_moments=None,
+        **BINS,
     )
     kw.update(extra)
     return kw

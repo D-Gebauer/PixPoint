@@ -59,6 +59,35 @@ def encode_angles(exp2phi: np.ndarray) -> np.ndarray:
     return (steps % ANGLE_STEPS).astype(np.uint16)
 
 
+def encode_angles_from_phi(phi: np.ndarray) -> np.ndarray:
+    """Angles in radians -> uint16 codes (round to nearest, modulo 2 pi).
+
+    The coarse blocks of a moment-carrying payload store the *full* position
+    angle phi this way (the plain blocks store 2 phi through
+    :func:`encode_angles`); same code, same resolution, half the angular
+    resolution on 2 phi for those blocks only.
+    """
+    steps = np.rint(np.asarray(phi, dtype=np.float64) / ANGLE_UNIT).astype(np.int64)
+    return (steps % ANGLE_STEPS).astype(np.uint16)
+
+
+def encode_separations(d: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Separations of one angular bin -> uint16 codes, linear in
+    ``[lo, hi]`` (``code = round((d - lo) / (hi - lo) * 65535)``, clipped).
+    The kernels decode ``d = lo + code * (hi - lo) / 65535``; the resolution
+    ``(hi - lo) / 65535`` is ~1e-5 of the bin width, far below the 1 % the
+    moment correction needs of ``1/d``."""
+    scale = (float(hi) - float(lo)) / 65535.0
+    codes = np.rint((np.asarray(d, dtype=np.float64) - float(lo)) / scale)
+    return np.clip(codes, 0, 65535).astype(np.uint16)
+
+
+def decode_separations(codes: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Inverse of :func:`encode_separations` (float64)."""
+    scale = (float(hi) - float(lo)) / 65535.0
+    return float(lo) + np.asarray(codes, dtype=np.float64) * scale
+
+
 def decode_angles(codes: np.ndarray, complex_dtype: np.dtype) -> np.ndarray:
     """uint16 angles -> rotation factors (same arithmetic as the CUDA kernel:
     alpha = code * 2 pi / 65536, evaluated at float64)."""
@@ -200,16 +229,48 @@ def pack_host_patch(
     bin_counts: np.ndarray,
     groups: Sequence[Tuple[int, int, int]],
     index_dtype: np.dtype,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    moments: Optional[Tuple[np.ndarray, np.ndarray, int, np.ndarray]] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """The ``pack_host_pairs`` payload of one patch, on its *global* ids:
-    ``(packed (npairs, 4) uint16, block ids (concatenated), block sizes)``."""
+    ``(packed (npairs, 4) uint16, block ids (concatenated), block sizes,
+    separation codes)``.
+
+    ``moments = (phi (2, n_coarse), inv_d (n_coarse,), first coarse bin,
+    bin edges)`` makes the coarse tail of the payload carry the full angle
+    codes (:func:`encode_angles_from_phi`) and returns the separation codes
+    of those pairs (:func:`encode_separations`, per bin); ``None`` otherwise.
+    """
     packed, blocks, _ = pack_patch(ids, exp2phi, bin_counts, groups)
     block_ids = (
         np.concatenate(blocks).astype(index_dtype, copy=False)
         if blocks
         else np.zeros(0, dtype=index_dtype)
     )
-    return packed, block_ids, np.array([b.size for b in blocks], dtype=np.int64)
+    d_codes = None
+    if moments is not None:
+        phi, inv_d, b_c, edges = moments
+        counts = np.asarray(bin_counts, dtype=np.int64)
+        fine = int(np.sum(counts[:b_c]))
+        n_coarse = int(np.sum(counts[b_c:]))
+        if phi.shape[1] != n_coarse or inv_d.size != n_coarse:
+            raise ValueError("the coarse pairs' angles do not match the pair list")
+        packed[fine:, 2:] = encode_angles_from_phi(phi).T
+        d_codes = np.empty(n_coarse, dtype=np.uint16)
+        run = 0
+        with np.errstate(divide="ignore"):
+            d_all = np.where(inv_d > 0, 1.0 / np.where(inv_d > 0, inv_d, 1.0), 0.0)
+        for b in range(b_c, len(counts)):
+            n_b = int(counts[b])
+            d_codes[run : run + n_b] = encode_separations(
+                d_all[run : run + n_b], float(edges[b]), float(edges[b + 1])
+            )
+            run += n_b
+    return (
+        packed,
+        block_ids,
+        np.array([b.size for b in blocks], dtype=np.int64),
+        d_codes,
+    )
 
 
 _T = TypeVar("_T")

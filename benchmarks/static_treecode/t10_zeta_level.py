@@ -40,15 +40,45 @@ MAP_DIR = "/e/ocean1/users/dgebauer/sbi/shear_maps/grid_baryonified/4BINS/"
 W_FILE = "/e/ocean1/users/dgebauer/sbi/shear_maps/SumOfWeights_512.npy"
 CENTER_DIR = "/e/ocean1/users/dgebauer/sbi/CosmoFuse/Q{r}/"
 MASK_FILE = "~/research/lfi/local/DESY3_Mask.fits"
+EL9_MASK_FILE = (
+    "/project/ocean1-seitz/users/dgebauer/research/CosmoFuse-treecode-data/DESY3_Mask.fits"
+)
+
+
+def _path(p):
+    """seitz1-era path -> el9 path when the former does not exist."""
+    q = os.path.expanduser(p)
+    if os.path.exists(q):
+        return q
+    alt = q.replace("/e/ocean1/users/dgebauer", "/project/ocean1-seitz/users/dgebauer")
+    if os.path.exists(alt):
+        return alt
+    if q.endswith("DESY3_Mask.fits") and os.path.exists(EL9_MASK_FILE):
+        return EL9_MASK_FILE
+    return q
 NSIDE = 512
+
+
+def _cell_moments(args):
+    cm = getattr(args, "cell_moments", "quad")
+    return None if cm in (None, "none", "None") else cm
+
+
+def _tag(args, k, aperture_nside):
+    tag = "fine" if k is None else f"k{k:g}"
+    if aperture_nside is not None:
+        tag += f"_ap{aperture_nside}"
+    if (k is not None or aperture_nside is not None) and _cell_moments(args):
+        tag += f"_{_cell_moments(args)}"
+    return tag
 
 
 def build_correlation(args, resolution_factor, aperture_nside=None):
     from CosmoFuse import Integrated3PCF
 
-    mask = hp.ud_grade(hp.read_map(os.path.expanduser(MASK_FILE)), NSIDE)
+    mask = hp.ud_grade(hp.read_map(_path(MASK_FILE)), NSIDE)
     map_inds = np.where(mask != 0)[0]
-    cdir = CENTER_DIR.format(r=args.radius)
+    cdir = _path(CENTER_DIR.format(r=args.radius)) + "/"
     phi = np.loadtxt(cdir + "patch_center_original_phi.dat")
     theta = np.loadtxt(cdir + "patch_center_original_theta.dat")
 
@@ -70,14 +100,13 @@ def build_correlation(args, resolution_factor, aperture_nside=None):
         accumulation_precision="float64",
         resolution_factor=resolution_factor,
         aperture_nside=aperture_nside,
+        cell_moments=_cell_moments(args),
     )
     return corr, map_inds, edges
 
 
 def measure(args):
-    tag = "fine" if args.k is None else f"k{args.k:g}"
-    if args.aperture_nside is not None:
-        tag += f"_ap{args.aperture_nside}"
+    tag = _tag(args, args.k, args.aperture_nside)
     if args.f16:
         tag += "_f16"
     corr, map_inds, edges = build_correlation(args, args.k, args.aperture_nside)
@@ -92,7 +121,7 @@ def measure(args):
           f"{corr.ntotpairs / 1e6:.1f} M pairs", flush=True)
     corr.prepare()
 
-    w = np.load(W_FILE)[: args.nz]
+    w = np.load(_path(W_FILE))[: args.nz]
     if w.shape[1] != map_inds.size:          # full-sky file -> row space
         w = w[:, map_inds]
     w = np.ascontiguousarray(w, dtype=np.float32)
@@ -101,7 +130,7 @@ def measure(args):
     M_a, xi_p, xi_m = [], [], []
     wall = 0.0
     for ifile in range(args.nfiles):
-        maps = np.load(MAP_DIR + f"gamma_{ifile:04d}.npy")  # (7,4,nz,2,nrows)
+        maps = np.load(_path(MAP_DIR + f"gamma_{ifile:04d}.npy"))  # (7,4,nz,2,nrows)
         for ireal in range(maps.shape[0]):
             for iftp in range(maps.shape[1]):
                 shear = np.ascontiguousarray(
@@ -165,9 +194,7 @@ def analyse(args):
     tag_a = args.a or "fine"
     tag_b = args.b
     if tag_b is None:
-        tag_b = "fine" if args.k is None else f"k{args.k:g}"
-        if args.aperture_nside is not None:
-            tag_b += f"_ap{args.aperture_nside}"
+        tag_b = _tag(args, args.k, args.aperture_nside)
     fine = np.load(os.path.join(args.outdir, f"t10_{tag_a}.npz"))
     coarse = np.load(os.path.join(args.outdir, f"t10_{tag_b}.npz"))
     edges = fine["edges"]
@@ -269,6 +296,9 @@ def main():
     ap.add_argument("--aperture-nside", type=int, default=None,
                     help="evaluate M_ap on the map degraded to this nside "
                          "(T12; omit for the full-resolution aperture)")
+    ap.add_argument("--cell-moments", default="quad",
+                    help="quad (default), dipole or none: what a coarse cell "
+                         "carries (8.0); none reproduces the 7.x cells")
     ap.add_argument("--radius", type=int, default=110)
     ap.add_argument("--theta-min", type=float, default=15.0)
     ap.add_argument("--theta-max", type=float, default=250.0)

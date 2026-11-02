@@ -43,6 +43,7 @@ def make_setup(pack, k=2.0, n_side_centers=4):
         rotation_precision="float64",
         resolution_factor=k,
         pack_pairs=pack,
+        cell_moments=None,
     )
     corr.preprocess()
     return corr, mask

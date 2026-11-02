@@ -62,6 +62,7 @@ def build():
         rotation_precision="float64",
         pair_search_precision="float64",
         resolution_factor=RESOLUTION_FACTOR,
+        cell_moments=None,  # TreeCorr on the cells == the plain cells
     )
     corr.preprocess()
     return corr

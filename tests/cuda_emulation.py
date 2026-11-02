@@ -1272,7 +1272,778 @@ def _emulate_3pcf_multipoles(params, grid, args):
             flat[c * nbins + b] = acc
 
 
+# ── Moment-carrying cells ───────────────────────────────────────────────────
+# Twins of moment_rows.cu and of the *_mom tiles (pair_tiles.cuh), written on
+# the float64 reference arithmetic of CosmoFuse.moments (the kernels compute
+# at the map type; identical for float64 maps, 1e-7-level for float32).
+
+
+def _emulate_moment_level(params, grid, args):
+    """moment_rows.cu :: gpu_moment_level<TSRC, QT, TOUT, KIND, NM, SEG>."""
+    from CosmoFuse.moments import cell_moments_numpy, moment_factors
+
+    kind, nm, seg = int(params[3]), int(params[4]), int(params[5])
+    (
+        indptr,
+        indices,
+        cell_geom,
+        pix_xyz,
+        w_src,
+        w_base,
+        w_lead,
+        w_row,
+        v_src,
+        v_base,
+        v_lead,
+        v_comp,
+        v_row,
+        out_mom,
+        out_w,
+        n_cells,
+        n_lead,
+    ) = args
+    n_cells, n_lead = int(n_cells), int(n_lead)
+    if seg not in (1, 2, 4, 8, 16, 32):
+        raise AssertionError(f"SEG must be a power of two in 1..32, got {seg}")
+    if int(grid[0]) * (256 // seg) < n_cells * n_lead:
+        raise AssertionError("moment launch does not cover all (cell, lead)")
+    indptr = np.asarray(indptr, dtype=np.int64)
+    indices = np.asarray(indices, dtype=np.int64)
+    geom = np.asarray(cell_geom, dtype=np.float64)
+    pix = np.asarray(pix_xyz, dtype=np.float64)
+    cell = np.repeat(np.arange(n_cells), np.diff(indptr))
+    t, dx, dy = moment_factors(geom[cell], pix[indices])
+    wf = np.asarray(w_src).reshape(-1)
+    vf = np.asarray(v_src).reshape(-1)
+    w_base, w_lead, w_row = int(w_base), int(w_lead), int(w_row)
+    v_base, v_lead, v_comp, v_row = int(v_base), int(v_lead), int(v_comp), int(v_row)
+    rows = np.arange(int(indices.max()) + 1 if indices.size else 0, dtype=np.int64)
+    out_mom3 = out_mom.reshape(n_cells, n_lead, nm, 2)
+    out_w2 = out_w.reshape(n_cells, n_lead)
+    order = 2 if nm == 6 else 1
+    for lead in range(n_lead):
+        w = wf[w_base + lead * w_lead + rows * w_row].astype(np.float64)
+        if kind == 2:
+            g1 = vf[v_base + lead * v_lead + rows * v_row].astype(np.float64)
+            g2 = vf[v_base + lead * v_lead + v_comp + rows * v_row].astype(np.float64)
+            values = g1 + 1j * g2
+        elif kind == 1:
+            values = vf[v_base + lead * v_lead + rows * v_row].astype(np.float64)
+        else:
+            values = None
+        m, W = cell_moments_numpy(indptr, indices, t, dx, dy, w, values, order)
+        inv = np.where(W != 0, 1.0 / np.where(W != 0, W, 1.0), 0.0)
+        out_mom3[:, lead, :, 0] = (np.real(m) * inv[:, None]).astype(out_mom.dtype)
+        out_mom3[:, lead, :, 1] = (np.imag(m) * inv[:, None]).astype(out_mom.dtype)
+        out_w2[:, lead] = W.astype(out_w.dtype)
+
+
+def _moment_geometry_unpacked(ind_i, ind_j, phi_i, phi_j, inv_d, mb, start, stop):
+    g = np.arange(start, stop) + (int(mb) - start)
+    return (
+        ind_i[start:stop].astype(np.int64),
+        ind_j[start:stop].astype(np.int64),
+        np.asarray(phi_i)[g].astype(np.float64),
+        np.asarray(phi_j)[g].astype(np.float64),
+        np.asarray(inv_d)[g].astype(np.float64),
+    )
+
+
+def _moment_geometry_packed(pairs, d_codes, base, mb, d_lo, d_scale, start, stop):
+    """phi = 2 pi code / 65536 (the coarse blocks encode phi, not 2 phi);
+    d = d_lo + code * d_scale."""
+    p = np.asarray(pairs[start:stop])
+    assert p.dtype == np.uint16 and p.shape[1] == 4
+    g = np.arange(start, stop) + (int(mb) - start)
+    unit = 2.0 * np.pi / 65536.0
+    d = float(d_lo) + np.asarray(d_codes)[g].astype(np.float64) * float(d_scale)
+    return (
+        base + p[:, 0].astype(np.int64),
+        base + p[:, 1].astype(np.int64),
+        p[:, 2].astype(np.float64) * unit,
+        p[:, 3].astype(np.float64) * unit,
+        1.0 / d,
+    )
+
+
+def _cell_moments(mom, cells, nz):
+    """(npairs, nz, NM) complex moments of the cells of one pair end."""
+    m = np.asarray(mom)  # (n_appended, nz, NM, 2)
+    sel = m[cells]  # (npairs, nz, NM, 2)
+    return sel[..., 0].astype(np.float64) + 1j * sel[..., 1].astype(np.float64)
+
+
+def _tile_xipm_mom(
+    shear,
+    weights,
+    mom,
+    tomo_bins,
+    order,
+    acc,
+    geom,
+    cells,
+    out_num,
+    out_den,
+    nbins_total,
+    bin_flat,
+):
+    from CosmoFuse.moments import xipm_pair_terms
+
+    idx_a, idx_b, phi_a, phi_b, inv_d = geom
+    cell_a, cell_b = cells
+    ncomb = (tomo_bins * (tomo_bins + 1)) // 2
+    shear3 = np.asarray(shear).reshape(-1, tomo_bins, 2)
+    weights2 = np.asarray(weights).reshape(-1, tomo_bins)
+    num_flat = out_num.reshape(-1)
+    den_flat = out_den.reshape(-1)
+    M_a = shear3[idx_a].astype(np.float64)
+    M_b = shear3[idx_b].astype(np.float64)
+    mom_a = _cell_moments(mom, cell_a, tomo_bins)
+    mom_b = _cell_moments(mom, cell_b, tomo_bins)
+    # the monopole of the moment buffer is the transported mean too; use the
+    # row buffer's value as the kernel does
+    mom_a[:, :, 0] = M_a[..., 0] + 1j * M_a[..., 1]
+    mom_b[:, :, 0] = M_b[..., 0] + 1j * M_b[..., 1]
+    w_a, w_b = weights2[idx_a].astype(np.float64), weights2[idx_b].astype(np.float64)
+    k = 0
+    for i in range(tomo_bins):
+        for j in range(i, tomo_bins):
+            sum_p = sum_m = sum_w = acc(0)
+            for ori, (ta, tb) in enumerate(((i, j), (j, i))):
+                if ori == 1 and i == j:
+                    continue
+                xip, xim = xipm_pair_terms(
+                    mom_a[:, ta], mom_b[:, tb], phi_a, phi_b, inv_d, order
+                )
+                w_pair = w_a[:, ta] * w_b[:, tb]
+                sum_p += np.sum(w_pair * xip, dtype=acc)
+                sum_m += np.sum(w_pair * xim, dtype=acc)
+                sum_w += np.sum(w_pair, dtype=acc)
+            num_flat[k * nbins_total + bin_flat] = sum_p
+            num_flat[(ncomb + k) * nbins_total + bin_flat] = sum_m
+            den_flat[k * nbins_total + bin_flat] = sum_w
+            k += 1
+
+
+def _tile_ds_mom(
+    density,
+    shear,
+    lens_w,
+    source_w,
+    mom_lens,
+    mom_src,
+    lens_bins,
+    source_bins,
+    order,
+    acc,
+    geom,
+    cells,
+    out_num,
+    out_den,
+    nbins_total,
+    bin_flat,
+):
+    from CosmoFuse.moments import gammat_pair_terms
+
+    idx_a, idx_b, phi_a, phi_b, inv_d = geom
+    cell_a, cell_b = cells
+    density2 = np.asarray(density).reshape(-1, lens_bins)
+    lens_w2 = np.asarray(lens_w).reshape(-1, lens_bins)
+    shear3 = np.asarray(shear).reshape(-1, source_bins, 2)
+    source_w2 = np.asarray(source_w).reshape(-1, source_bins)
+    num_flat = out_num.reshape(-1)
+    den_flat = out_den.reshape(-1)
+    la = _cell_moments(mom_lens, cell_a, lens_bins)
+    lb = _cell_moments(mom_lens, cell_b, lens_bins)
+    la[:, :, 0] = density2[idx_a].astype(np.float64)
+    lb[:, :, 0] = density2[idx_b].astype(np.float64)
+    sa = _cell_moments(mom_src, cell_a, source_bins)
+    sb = _cell_moments(mom_src, cell_b, source_bins)
+    Ma, Mb = shear3[idx_a].astype(np.float64), shear3[idx_b].astype(np.float64)
+    sa[:, :, 0] = Ma[..., 0] + 1j * Ma[..., 1]
+    sb[:, :, 0] = Mb[..., 0] + 1j * Mb[..., 1]
+    dw_a, dw_b = lens_w2[idx_a].astype(np.float64), lens_w2[idx_b].astype(np.float64)
+    sw_a, sw_b = source_w2[idx_a].astype(np.float64), source_w2[idx_b].astype(
+        np.float64
+    )
+    for lbn in range(lens_bins):
+        for s_ in range(source_bins):
+            k = lbn * source_bins + s_
+            gt_ab = gammat_pair_terms(la[:, lbn], sb[:, s_], phi_a, phi_b, inv_d, order)
+            gt_ba = gammat_pair_terms(lb[:, lbn], sa[:, s_], phi_b, phi_a, inv_d, order)
+            w_ab = dw_a[:, lbn] * sw_b[:, s_]
+            w_ba = dw_b[:, lbn] * sw_a[:, s_]
+            num_flat[k * nbins_total + bin_flat] = np.sum(
+                w_ab * gt_ab, dtype=acc
+            ) + np.sum(w_ba * gt_ba, dtype=acc)
+            den_flat[k * nbins_total + bin_flat] = np.sum(w_ab, dtype=acc) + np.sum(
+                w_ba, dtype=acc
+            )
+
+
+def _emulate_xipm_mom(packed):
+    def _emulate(params, grid, args):
+        if packed:
+            tomo_bins, order = int(params[1]), int(params[2])
+            acc = _SCALAR_TYPES[params[3]]
+            (
+                shear,
+                weights,
+                mom,
+                pairs,
+                d_codes,
+                d_lo,
+                d_scale,
+                bin_offsets,
+                row_base,
+                mom_base,
+                cell_of_row,
+                out_num,
+                out_den,
+                nbins_total,
+            ) = args
+        else:
+            tomo_bins, order = int(params[2]), int(params[3])
+            acc = _SCALAR_TYPES[params[5]]
+            (
+                shear,
+                weights,
+                mom,
+                ind_i,
+                ind_j,
+                phi_i,
+                phi_j,
+                inv_d,
+                bin_offsets,
+                mom_base,
+                n_active,
+                out_num,
+                out_den,
+                nbins_total,
+            ) = args
+        nbins_total = int(nbins_total)
+        assert int(grid[1]) == 1
+        for bin_flat in range(int(grid[0])):
+            if bin_flat >= nbins_total:
+                continue
+            start, stop = int(bin_offsets[bin_flat]), int(bin_offsets[bin_flat + 1])
+            mb = int(mom_base[bin_flat])
+            if mb < 0 or stop <= start:
+                continue  # a fine bin: the plain tile owns it
+            if packed:
+                geom = _moment_geometry_packed(
+                    pairs,
+                    d_codes,
+                    int(row_base[bin_flat]),
+                    mb,
+                    d_lo[bin_flat],
+                    d_scale[bin_flat],
+                    start,
+                    stop,
+                )
+                cells = (
+                    np.asarray(cell_of_row)[geom[0]].astype(np.int64),
+                    np.asarray(cell_of_row)[geom[1]].astype(np.int64),
+                )
+            else:
+                geom = _moment_geometry_unpacked(
+                    ind_i, ind_j, phi_i, phi_j, inv_d, mb, start, stop
+                )
+                cells = (geom[0] - int(n_active), geom[1] - int(n_active))
+            _tile_xipm_mom(
+                shear,
+                weights,
+                mom,
+                tomo_bins,
+                order,
+                acc,
+                geom,
+                cells,
+                out_num,
+                out_den,
+                nbins_total,
+                bin_flat,
+            )
+
+    return _emulate
+
+
+def _emulate_ds_mom(packed):
+    def _emulate(params, grid, args):
+        if packed:
+            lens_bins, source_bins, order = (int(p) for p in params[1:4])
+            acc = _SCALAR_TYPES[params[4]]
+            (
+                density,
+                shear,
+                lens_w,
+                source_w,
+                mom_lens,
+                mom_src,
+                pairs,
+                d_codes,
+                d_lo,
+                d_scale,
+                bin_offsets,
+                row_base,
+                mom_base,
+                cell_of_row,
+                out_num,
+                out_den,
+                nbins_total,
+            ) = args
+        else:
+            lens_bins, source_bins, order = (int(p) for p in params[2:5])
+            acc = _SCALAR_TYPES[params[6]]
+            (
+                density,
+                shear,
+                lens_w,
+                source_w,
+                mom_lens,
+                mom_src,
+                ind_i,
+                ind_j,
+                phi_i,
+                phi_j,
+                inv_d,
+                bin_offsets,
+                mom_base,
+                n_active,
+                out_num,
+                out_den,
+                nbins_total,
+            ) = args
+        nbins_total = int(nbins_total)
+        assert int(grid[1]) == 1
+        for bin_flat in range(int(grid[0])):
+            if bin_flat >= nbins_total:
+                continue
+            start, stop = int(bin_offsets[bin_flat]), int(bin_offsets[bin_flat + 1])
+            mb = int(mom_base[bin_flat])
+            if mb < 0 or stop <= start:
+                continue
+            if packed:
+                geom = _moment_geometry_packed(
+                    pairs,
+                    d_codes,
+                    int(row_base[bin_flat]),
+                    mb,
+                    d_lo[bin_flat],
+                    d_scale[bin_flat],
+                    start,
+                    stop,
+                )
+                cells = (
+                    np.asarray(cell_of_row)[geom[0]].astype(np.int64),
+                    np.asarray(cell_of_row)[geom[1]].astype(np.int64),
+                )
+            else:
+                geom = _moment_geometry_unpacked(
+                    ind_i, ind_j, phi_i, phi_j, inv_d, mb, start, stop
+                )
+                cells = (geom[0] - int(n_active), geom[1] - int(n_active))
+            _tile_ds_mom(
+                density,
+                shear,
+                lens_w,
+                source_w,
+                mom_lens,
+                mom_src,
+                lens_bins,
+                source_bins,
+                order,
+                acc,
+                geom,
+                cells,
+                out_num,
+                out_den,
+                nbins_total,
+                bin_flat,
+            )
+
+    return _emulate
+
+
+def _emulate_3x2pt_mom(packed):
+    """tomo_tiled_3x2pt.cu :: gpu_tiled_{tomo,packed}_reduce_3x2pt_mom: the
+    coarse bins' xi+- and xi_t with moments, xi_g plain, in one walk."""
+
+    def _emulate(params, grid, args):
+        if packed:
+            n_density, n_shear, auto_only, order = (int(p) for p in params[1:5])
+            acc = _SCALAR_TYPES[params[5]]
+            (
+                density,
+                shear,
+                density_w,
+                shear_w,
+                mom_lens,
+                mom_src,
+                pairs,
+                d_codes,
+                d_lo,
+                d_scale,
+                bin_offsets,
+                row_base,
+                mom_base,
+                cell_of_row,
+                xipm_num,
+                xipm_den,
+                xig_num,
+                xig_den,
+                xit_num,
+                xit_den,
+                nbins_total,
+            ) = args
+        else:
+            n_density, n_shear, auto_only, order = (int(p) for p in params[2:6])
+            acc = _SCALAR_TYPES[params[7]]
+            (
+                density,
+                shear,
+                density_w,
+                shear_w,
+                mom_lens,
+                mom_src,
+                ind_i,
+                ind_j,
+                phi_i,
+                phi_j,
+                inv_d,
+                bin_offsets,
+                mom_base,
+                n_active,
+                xipm_num,
+                xipm_den,
+                xig_num,
+                xig_den,
+                xit_num,
+                xit_den,
+                nbins_total,
+            ) = args
+        nbins_total = int(nbins_total)
+        assert int(grid[1]) == 1
+        for bin_flat in range(int(grid[0])):
+            if bin_flat >= nbins_total:
+                continue
+            start, stop = int(bin_offsets[bin_flat]), int(bin_offsets[bin_flat + 1])
+            mb = int(mom_base[bin_flat])
+            if mb < 0 or stop <= start:
+                continue
+            if packed:
+                geom = _moment_geometry_packed(
+                    pairs,
+                    d_codes,
+                    int(row_base[bin_flat]),
+                    mb,
+                    d_lo[bin_flat],
+                    d_scale[bin_flat],
+                    start,
+                    stop,
+                )
+                cells = (
+                    np.asarray(cell_of_row)[geom[0]].astype(np.int64),
+                    np.asarray(cell_of_row)[geom[1]].astype(np.int64),
+                )
+            else:
+                geom = _moment_geometry_unpacked(
+                    ind_i, ind_j, phi_i, phi_j, inv_d, mb, start, stop
+                )
+                cells = (geom[0] - int(n_active), geom[1] - int(n_active))
+            _tile_xipm_mom(
+                shear,
+                shear_w,
+                mom_src,
+                n_shear,
+                order,
+                acc,
+                geom,
+                cells,
+                xipm_num,
+                xipm_den,
+                nbins_total,
+                bin_flat,
+            )
+            _tile_dd(
+                density,
+                density_w,
+                n_density,
+                bool(auto_only),
+                acc,
+                geom[:2],
+                xig_num,
+                xig_den,
+                nbins_total,
+                bin_flat,
+            )
+            _tile_ds_mom(
+                density,
+                shear,
+                density_w,
+                shear_w,
+                mom_lens,
+                mom_src,
+                n_density,
+                n_shear,
+                order,
+                acc,
+                geom,
+                cells,
+                xit_num,
+                xit_den,
+                nbins_total,
+                bin_flat,
+            )
+
+    return _emulate
+
+
+def _aperture_shear_mom(mom, cells, nz, m, psi, inv_theta, qv, qd, qdd, order):
+    """Per disc entry, (npairs, nz): -Re(N e^{2i psi}) of aperture_shear_terms
+    with the row buffer's transported mean as the monopole."""
+    from CosmoFuse.moments import aperture_shear_terms
+
+    mc = _cell_moments(mom, cells, nz)  # (n, nz, NM) complex
+    out = np.zeros((psi.size, nz))
+    for z in range(nz):
+        mz = mc[:, z].copy()
+        mz[:, 0] = m[:, z]
+        out[:, z] = aperture_shear_terms(mz, psi, inv_theta, qv, qd, qdd, order)
+    return out
+
+
+def _aperture_scalar_mom(mom, cells, nz, m, psi, inv_theta, uv, ud, udd, order):
+    from CosmoFuse.moments import aperture_scalar_terms
+
+    mc = _cell_moments(mom, cells, nz)
+    out = np.zeros((psi.size, nz))
+    for z in range(nz):
+        mz = mc[:, z].copy()
+        mz[:, 0] = m[:, z]
+        out[:, z] = aperture_scalar_terms(mz, psi, inv_theta, uv, ud, udd, order)
+    return out
+
+
+def _emulate_aperture_shear_tomo_mom(params, grid, args):
+    """aperture_tomo.cu :: gpu_aperture_shear_tomo_mom<T, QT, NZ, MOM>."""
+    ntomo, order = int(params[2]), int(params[3])
+    (
+        g1,
+        g2,
+        g_stride,
+        g_elem,
+        weights,
+        w_stride,
+        w_elem,
+        mom,
+        n_active,
+        q_inds,
+        q_phi,
+        q_inv_theta,
+        q_val,
+        q_dval,
+        q_ddval,
+        q_offsets,
+        q_patch_area,
+        out_num,
+        out_den,
+        npatches,
+    ) = args
+    _check_planar_stride(g1, g_stride, g_elem)
+    _check_planar_stride(g2, g_stride, g_elem)
+    _check_planar_stride(weights, w_stride, w_elem)
+    npatches = int(npatches)
+    for patch in range(int(grid[0])):
+        if patch >= npatches:
+            continue
+        start, stop = int(q_offsets[patch]), int(q_offsets[patch + 1])
+        pix = q_inds[start:stop].astype(np.int64)
+        cells = pix - int(n_active)
+        m = np.stack(
+            [
+                g1[b, :][pix].astype(np.float64) + 1j * g2[b, :][pix].astype(np.float64)
+                for b in range(ntomo)
+            ],
+            axis=1,
+        )
+        terms = _aperture_shear_mom(
+            mom,
+            cells,
+            ntomo,
+            m,
+            np.asarray(q_phi[start:stop], dtype=np.float64),
+            np.asarray(q_inv_theta[start:stop], dtype=np.float64),
+            np.asarray(q_val[start:stop], dtype=np.float64),
+            np.asarray(q_dval[start:stop], dtype=np.float64),
+            np.asarray(q_ddval[start:stop], dtype=np.float64),
+            order,
+        )
+        for b in range(ntomo):
+            wv = weights[b, :][pix].astype(np.float64)
+            out_num[b, patch] = q_patch_area[patch] * np.sum(wv * terms[:, b])
+            out_den[b, patch] = np.sum(wv)
+
+
+def _emulate_aperture_density_tomo_mom(params, grid, args):
+    """aperture_tomo.cu :: gpu_aperture_density_tomo_mom<T, QT, NZ, MOM>."""
+    ntomo, order = int(params[2]), int(params[3])
+    (
+        values,
+        v_stride,
+        v_elem,
+        weights,
+        w_stride,
+        w_elem,
+        mom,
+        n_active,
+        q_inds,
+        q_phi,
+        q_inv_theta,
+        q_val,
+        q_dval,
+        q_ddval,
+        q_offsets,
+        q_patch_area,
+        out_num,
+        out_den,
+        npatches,
+    ) = args
+    _check_planar_stride(values, v_stride, v_elem)
+    _check_planar_stride(weights, w_stride, w_elem)
+    npatches = int(npatches)
+    for patch in range(int(grid[0])):
+        if patch >= npatches:
+            continue
+        start, stop = int(q_offsets[patch]), int(q_offsets[patch + 1])
+        pix = q_inds[start:stop].astype(np.int64)
+        cells = pix - int(n_active)
+        m = np.stack(
+            [values[b, :][pix].astype(np.float64) for b in range(ntomo)], axis=1
+        )
+        terms = _aperture_scalar_mom(
+            mom,
+            cells,
+            ntomo,
+            m,
+            np.asarray(q_phi[start:stop], dtype=np.float64),
+            np.asarray(q_inv_theta[start:stop], dtype=np.float64),
+            np.asarray(q_val[start:stop], dtype=np.float64),
+            np.asarray(q_dval[start:stop], dtype=np.float64),
+            np.asarray(q_ddval[start:stop], dtype=np.float64),
+            order,
+        )
+        for b in range(ntomo):
+            wv = weights[b, :][pix].astype(np.float64)
+            out_num[b, patch] = q_patch_area[patch] * np.sum(wv * terms[:, b])
+            out_den[b, patch] = np.sum(wv)
+
+
+def _emulate_fused_aperture_mom(params, grid, args):
+    """tomo_fused_3x2pt.cu :: gpu_3x2pt_tomo_aperture_mom<T, QT, ND, NS, ACC, MOM>."""
+    n_density, n_shear = int(params[2]), int(params[3])
+    acc = _SCALAR_TYPES[params[4]]
+    order = int(params[5])
+    (
+        density,
+        shear,
+        density_w,
+        shear_w,
+        mom_lens,
+        mom_src,
+        n_active,
+        npatches,
+        q_inds,
+        q_phi,
+        q_inv_theta,
+        q_val,
+        q_dval,
+        q_ddval,
+        q_offsets,
+        q_patch_area,
+        k_inds,
+        k_phi,
+        k_inv_theta,
+        k_val,
+        k_dval,
+        k_ddval,
+        k_offsets,
+        k_area,
+        out_ma_num,
+        out_ma_den,
+        out_mg_num,
+        out_mg_den,
+        section,
+    ) = args
+    npatches, section = int(npatches), int(section)
+    shear3 = np.asarray(shear).reshape(-1, n_shear, 2)
+    shear_w2 = np.asarray(shear_w).reshape(-1, n_shear)
+    density2 = np.asarray(density).reshape(-1, n_density)
+    density_w2 = np.asarray(density_w).reshape(-1, n_density)
+    for x in range(int(grid[0])):
+        if x >= npatches:
+            continue
+        if section == 0:
+            start, stop = int(q_offsets[x]), int(q_offsets[x + 1])
+            pix = q_inds[start:stop].astype(np.int64)
+            cells = pix - int(n_active)
+            m = shear3[pix, :, 0].astype(np.float64) + 1j * shear3[pix, :, 1].astype(
+                np.float64
+            )
+            terms = _aperture_shear_mom(
+                mom_src,
+                cells,
+                n_shear,
+                m,
+                np.asarray(q_phi[start:stop], dtype=np.float64),
+                np.asarray(q_inv_theta[start:stop], dtype=np.float64),
+                np.asarray(q_val[start:stop], dtype=np.float64),
+                np.asarray(q_dval[start:stop], dtype=np.float64),
+                np.asarray(q_ddval[start:stop], dtype=np.float64),
+                order,
+            )
+            for y in range(n_shear):
+                wv = shear_w2[pix, y].astype(np.float64)
+                out_ma_num[y, x] = acc(q_patch_area[x]) * np.sum(
+                    wv * terms[:, y], dtype=acc
+                )
+                out_ma_den[y, x] = np.sum(wv, dtype=acc)
+        elif section == 1:
+            start, stop = int(k_offsets[x]), int(k_offsets[x + 1])
+            pix = k_inds[start:stop].astype(np.int64)
+            cells = pix - int(n_active)
+            m = density2[pix].astype(np.float64)
+            terms = _aperture_scalar_mom(
+                mom_lens,
+                cells,
+                n_density,
+                m,
+                np.asarray(k_phi[start:stop], dtype=np.float64),
+                np.asarray(k_inv_theta[start:stop], dtype=np.float64),
+                np.asarray(k_val[start:stop], dtype=np.float64),
+                np.asarray(k_dval[start:stop], dtype=np.float64),
+                np.asarray(k_ddval[start:stop], dtype=np.float64),
+                order,
+            )
+            for y in range(n_density):
+                wv = density_w2[pix, y].astype(np.float64)
+                out_mg_num[y, x] = acc(k_area[x]) * np.sum(wv * terms[:, y], dtype=acc)
+                out_mg_den[y, x] = np.sum(wv, dtype=acc)
+        else:
+            raise ValueError(f"Unknown aperture section: {section}")
+
+
 _KERNEL_EMULATORS = {
+    "gpu_moment_level": _emulate_moment_level,
+    "gpu_aperture_shear_tomo_mom": _emulate_aperture_shear_tomo_mom,
+    "gpu_aperture_density_tomo_mom": _emulate_aperture_density_tomo_mom,
+    "gpu_3x2pt_tomo_aperture_mom": _emulate_fused_aperture_mom,
+    "gpu_tiled_tomo_reduce_xipm_mom": _emulate_xipm_mom(packed=False),
+    "gpu_tiled_packed_reduce_xipm_mom": _emulate_xipm_mom(packed=True),
+    "gpu_tiled_tomo_reduce_ds_mom": _emulate_ds_mom(packed=False),
+    "gpu_tiled_packed_reduce_ds_mom": _emulate_ds_mom(packed=True),
+    "gpu_tiled_tomo_reduce_3x2pt_mom": _emulate_3x2pt_mom(packed=False),
+    "gpu_tiled_packed_reduce_3x2pt_mom": _emulate_3x2pt_mom(packed=True),
     "gpu_fused_tomo_reduce_xipm": _emulate_xipm,
     "gpu_tiled_tomo_reduce_xipm": _emulate_xipm_tiled,
     "gpu_tiled_packed_reduce_xipm": _emulate_xipm_packed,

@@ -35,6 +35,14 @@ from CosmoFuse.backend.density import (
     _build_cupy_density_shear_tomo_packed_kernel,
     _build_cupy_density_shear_tomo_vectorized_kernel,
 )
+from CosmoFuse.backend.moments import (
+    _build_cupy_3x2pt_aperture_moments_kernel,
+    _build_cupy_3x2pt_moment_kernel,
+    _build_cupy_aperture_moments_kernels,
+    _build_cupy_ds_moment_kernels,
+    _build_cupy_moment_level_kernel,
+    _build_cupy_xipm_moment_kernels,
+)
 from CosmoFuse.backend.shear import (
     _build_cupy_tomo_packed_kernel,
     _build_cupy_tomo_vectorized_kernel,
@@ -60,6 +68,12 @@ _BUILDERS = {
     "kernel_3x2pt_tomo_aperture": _build_cupy_3x2pt_tomo_aperture_kernel,
     "kernel_3x2pt_tomo_pairs": _build_cupy_3x2pt_tomo_pairs_kernel,
     "degrade_rows_kernel": _build_cupy_degrade_rows_kernel,
+    "kernel_moment_level": _build_cupy_moment_level_kernel,
+    "xipm_tomo_moments_kernel": _build_cupy_xipm_moment_kernels,
+    "kernel_density_shear_tomo_moments": _build_cupy_ds_moment_kernels,
+    "kernel_3x2pt_tomo_moments": _build_cupy_3x2pt_moment_kernel,
+    "aperture_tomo_moments_kernel": _build_cupy_aperture_moments_kernels,
+    "kernel_3x2pt_aperture_moments": _build_cupy_3x2pt_aperture_moments_kernel,
 }
 _EMULATED_KERNEL_ATTRS = tuple(_BUILDERS)
 

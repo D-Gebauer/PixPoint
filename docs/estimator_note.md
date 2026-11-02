@@ -173,3 +173,45 @@ simulation-based inference **as long as the same $k$ is used throughout**.
 Coarse and fine data vectors differ at the noise level, not only by the
 few-per-cent signal suppression, and must never be mixed between data,
 simulations and covariance.
+
+
+## 5. One-point statistics (`OnePoint`, 8.0.0)
+
+The same aperture quantities as in §1, at centres $c$ that tile the footprint instead of a
+patch set: every pixel of a HEALPix grid at $N_{\rm side}^{\rm c}$ (pixel $\approx \theta/2$
+by default) whose disc *coverage*
+
+$$ f_c = \frac{|\{p \in \mathcal D_c : p\ \text{unmasked}\}|}{|\mathcal D_c|} $$
+
+(binary mask at $N_{\rm side}$, independent of the weights and of the aperture window) is at
+least $f_{\min}$ (0.8). At each accepted centre, for a scale $\theta$,
+
+$$ M_{\mathrm{ap},c} = A_c \frac{\sum_{p\in D_c} w_p\, \gamma_{\rm t}(p;\hat n_c)\, Q(\theta_{cp})}{\sum_{p \in D_c} w_p}, \qquad
+   M_{\times,c} = A_c \frac{\sum_{p\in D_c} w_p\, \gamma_\times(p;\hat n_c)\, Q(\theta_{cp})}{\sum_{p \in D_c} w_p}, $$
+
+with $\gamma_\times = \gamma_1 \sin 2\phi - \gamma_2 \cos 2\phi$, $D_c$ the unmasked pixels within
+$5\theta$ (where $Q$ with $\theta_Q = \theta$ has decayed to $10^{-3}$) and $A_c$ their solid
+angle -- exactly $M_{\mathrm{ap}}$ of §1 with $R = \theta_Q = \theta$; and for a scalar field
+$f$ (κ or δ) one of
+
+$$ k_c = \frac{\sum_{p \in T_c} w_p f_p}{\sum_{p\in T_c} w_p} \;\;(T_c: \text{disc of radius } \theta), \qquad
+   k_c = \frac{\sum_{p \in c} w_p f_p}{\sum_{p \in c} w_p} \;\;(\text{the pixel } c \text{ of } N_{\rm side}^{\rm c}), \qquad
+   k_c = A_c \frac{\sum_{p\in D_c} w_p f_p U(\theta_{cp})}{\sum_{p\in D_c} w_p}. $$
+
+With `aperture_nside` the sums run over the cells of the degraded map (weighted means, moment
+corrections as for $M_{\rm ap}$), the coverage does not change.
+
+The estimator reports, per scale and tomographic bin, sums over the accepted apertures with
+**unit weight** (the DES Y3 moments convention; the aperture value is already normalised by its
+$\sum w$): the histogram on fixed edges $[e_b, e_{b+1})$ with under- and overflow, the raw
+moments $\sum_c x_c^k$ for $k = 1\dots5$, and the tomographic cross moments
+$\sum_c x_{i,c}\, x_{j,c}$, $\sum_c x_{i,c}^2 x_{j,c}$, $\sum_c x_{i,c} x_{j,c} x_{k,c}$. An aperture
+whose disc holds no weight in one of the tomographic bins ($\sum_{p} w_p = 0$ there) is left out
+of all sums; the count of apertures that entered is reported. PDF and moments are the ratios.
+
+Caveats for an analysis: the centres overlap heavily (the aperture is $5\theta$ wide, the
+centre spacing $\theta/2$), so the histogram counts are not independent and the PDF's
+covariance must come from simulations measured with the same centres; the coverage cut is a
+mask-dependent selection that data and simulations must share (same mask, same $f_{\min}$,
+same `centre_nside`); and `aperture_nside` is a window on the field that moves the tails of
+the PDF -- quantify it against full resolution before using it.

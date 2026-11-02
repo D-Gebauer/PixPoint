@@ -389,7 +389,7 @@ information fix, offered because it is 1.6× instead of 2.2–2.9× the kernel c
   128 (expect 2× / 3× the mono pass at the same level) and the ζ-level price via
   `t10_zeta_level.py --aperture-nside` for mono, dipole and quad.
 
-## Stage C — edge-splitting pair search — implemented 2026-11-02 (C5 A100 measurements pending)
+## Stage C — edge-splitting pair search — implemented and measured 2026-11-02
 
 Decisions taken (see the CHANGELOG entry): C2.1 (a) Numba on the host, parallel, no
 fastmath, float64 always (float32 search precision refused with `edge_slop`); C2.2 the
@@ -470,13 +470,64 @@ provenance, `docs/estimator_note.md` (binning definition: exact at slop 0).
    bitwise; packed ≡ unpacked; file round trip; CPU ≡ GPU.
 4. Preflight pair-count model within 20 % of the actual split count on the test footprint.
 
-### C5. Measurements
+### C5. Measurements — done 2026-11-02 (`benchmarks/edge_split/RESULTS.md`)
 
-Search time host vs prototype GPU (nside 512, 1024); device memory packed vs unpacked;
-ms/map at k = 4 + quad + split vs the notebook's 115 ms; the sawtooth at level seams gone
-in the noiseless mean (notebook plot `plot_variant_mean` as the reference figure).
+A100, DES Y3, k = 4 quad, nz = 4, float32 maps. Pairs: 1.5× (patches, 512) / 2.6× (patches,
+1024) / 4.4× (footprint, 512) / 10.8× (footprint, 1024) the static list; the footprint at 1024 has
+1.8e9 pairs = 78 GB unpacked, 18 GB packed. Per map: `three_by_two_pt` 9.8 → 56 ms on 69 patches
+at nside 1024 (notebook prototype: 115 ms), 115 → 2740 ms on the footprint; the split is also
+~2× slower *per pair* (mixed levels, pixel strips, moment tiles on every bin). Host search: 6 s
+(patches) / 277 s (footprint, 1024). Packing: memory ÷4, speed neutral. Verdict: a validation
+tool at k = 4, not the production estimator; the sawtooth plot waits for the k = 2 T10 rerun.
 
-## Stage D — 1-point statistics: `OnePoint`
+## Stage D — 1-point statistics: `OnePoint` — implemented 2026-11-02 (D4 measurements pending)
+
+**Implementation record** (what shipped vs. the plan below; `src/CosmoFuse/onepoint.py`,
+`OnePointResult` in `results.py`, gates `tests/test_onepoint.py`, 18 tests):
+
+- D1/D2.1 as planned: `OnePoint(nside, mask, scales, *, centre_nside, aperture_nside,
+  min_coverage, aperture_filter, k_aperture_filter, radius_factor, edges, device, ...)`,
+  `g(shear, w, flip_g1, flip_g2, cross, edges, values)`, `k(maps, w, edges, values)`. One
+  `_ApertureEngine(Integrated3PCF)` per (geometry kind, scale, device) with the accepted centres
+  as patches; `m_a` / `m_g` unchanged, so the values are bitwise the patch estimator's. The
+  aperture geometry never needed `pair_inds` (`m_a` builds it on demand), so nothing in
+  `correlations.py` changed. **M_× needs no kernel**: γ_× is the tangential kernel applied to
+  (γ_2, −γ_1), i.e. `m_a` on the swapped components with `flip_g2` -- exact, the sign fold is
+  free; price: a second pass over the disc geometry (`cross=False` skips it). A fused t/× kernel
+  is the lever if D4 shows the pass matters.
+- **Coverage is defined at the map resolution whatever `aperture_nside` is** (decided during
+  the gates): the window must not move the centre set, or two windows could not be compared on
+  the same apertures. The `"healpix"` top hat with `aperture_nside` needs `centre_nside <=
+  aperture_nside`.
+- D2.2 (geometry build) not done: the per-centre `query_disc` loop runs twice (coverage pass,
+  then `find_aperture_pairs`); 4.5e3 centres at nside 64 take 0.2 s. Measure at 1e5 centres /
+  nside 1024 in D4 before threading it.
+- **D2.3 reversed: no `cuda/onepoint.cu`.** The reduction (`_reduce_scale`) runs on the
+  backend's array module -- `searchsorted` + `bincount` for the half-open histogram, Σ x^k by
+  `power` + `sum`, cross sums by two GEMMs -- on (nz, n_apertures) values that are tiny next to
+  the aperture pass. A kernel would add a twin and a signature for nothing measurable; D4 can
+  overturn this with a number.
+- **D2.4 decided: unit weight per accepted aperture** (DES Y3 moments). An aperture whose disc
+  holds no weight in one tomographic bin is dropped from the sums of every bin (`count` reports
+  what entered). The real-GPU gate (`benchmarks/onepoint/gpu_gate.py`) caught that this cannot be
+  read off the values: the Numba shear kernel returns NaN for Σw = 0, the GPU `safe_divide` and
+  every `M_g` path return 0, so a GPU PDF silently counted zeros. `OnePoint` therefore runs a
+  weights-only pass per call (`_nonempty_apertures`: `m_g` with the weights as field, unit
+  weights, unit filter → `A Σw / N`, exactly 0 iff all weights are) -- one extra geometry read
+  per call; the only change to `correlations.py` is that `_k_aperture_geometry_dev` keeps a small
+  dict of filter values on the device instead of one slot, so alternating U and the unit filter
+  does not re-upload. `moments (nz, nscale, 5)` are k = 1..5 raw (central 2..5 derived).
+- D2.5: `device=[...]` splits centres by disc pixel count (`balanced_ranges`), parts add; the
+  result holds *sums* (`power_sums`, `cross_sums`, `hist`, `count`, `n_apertures`) so `+` is
+  exact. **No writer yet** -- `OnePointWriter` / a labelled-array `ZetaWriter` is the open
+  follow-up (the arrays are small: a per-map `OnePointResult` is ~kB).
+- D2.6: documented (module docstring, README, `docs/estimator_note.md` §5).
+- D3 gates 1–5 all in `tests/test_onepoint.py` (gate 5's "kernel signature/twin" part is void
+  without a new kernel; the emulated-GPU test patches every engine's backend instead), plus the
+  real-GPU gate `benchmarks/onepoint/gpu_gate.py` (cupy vs CPU, device list, coarse apertures).
+- D4: timing done (`benchmarks/onepoint/RESULTS.md`); the window study on the nside-512 archive
+  and the PDFast cross-check are pending.
+
 
 ### D1. What ships
 

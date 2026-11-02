@@ -9,7 +9,7 @@
 A Python package for measuring integrated 3-point correlation functions (i3PCFs), as well as
 footprint-wide two- and three-point correlation functions, on HEALPix maps, on GPU or CPU.
 
-Three estimators share one vocabulary: methods are TreeCorr's field codes (`g` = shear,
+Four estimators share one vocabulary: methods are TreeCorr's field codes (`g` = shear,
 `k` = scalar field such as an overdensity δ), and every call returns a labelled result object.
 
 | class | measures | methods | result |
@@ -17,6 +17,7 @@ Three estimators share one vocabulary: methods are TreeCorr's field codes (`g` =
 | `Integrated3PCF` | per-patch apertures and 2PCFs (the i3PCF ingredients) | `gg`, `kk`, `kg`, `three_by_two_pt`, `m_a`, `m_g` | `IntegratedResult` |
 | `Global2PCF` | 2PCFs of the whole footprint | `gg`, `kk`, `kg`, `three_by_two_pt` | `TwoPointResult` |
 | `Global3PCF` | 3PCF multipoles of the whole footprint | `ggg`, `kkk`, `kgg`, `kkg`, `measure` | `ThreePointResult` |
+| `OnePoint` | PDFs and moments of aperture fields over the footprint | `g`, `k` | `OnePointResult` |
 
 The integrated 3-point correlation function probes squeezed configurations of the bispectrum without the computational expense of the full 3-point correlation function.
 
@@ -422,6 +423,49 @@ cannot be silently combined with one measured under a different estimator. After
 with `resume=True`: anything written past the last flush is discarded and appending continues.
 `swmr=True` lets another process follow the file as it grows; it is off by default because a
 crashed SWMR file keeps a stale write lock (`h5clear -s` releases it).
+
+## One-point statistics: `OnePoint`
+
+The distribution of an aperture field over the footprint -- the aperture-mass PDF of a shear
+map, the PDF of a smoothed convergence or density map, and their moments -- measured with the
+same aperture kernels, row space, weights and `aperture_nside` window as `Integrated3PCF`, and
+no pairs at all.
+
+```python
+from CosmoFuse import OnePoint, U_crittenden
+
+op = OnePoint(nside, mask, scales=(20.0, 45.0, 90.0), min_coverage=0.8,
+              edges=np.linspace(-0.03, 0.03, 61), device="gpu")
+res = op.g(shear, w, flip_g1=True)       # fields "M_ap", "M_x"; shear (nz, 2, npix | n_active)
+res.hist["M_ap"]                         # (nz, nscale, nbins) counts on half-open bins
+res.pdf("M_ap"), res.moments("M_ap")     # PDF; raw moments <x^k>, k = 1..5
+res.central_moments("M_ap")              # <(x - <x>)^k>, k = 2..5
+res.cross_moments("M_ap")["ij"]          # <x_i x_j> over res.cross_index["ij"]
+
+resk = op.k(kappa, w)                    # top hat of radius theta (default)
+OnePoint(nside, mask, scales, k_aperture_filter="healpix").k(kappa, w)      # pixel top hat
+OnePoint(nside, mask, scales, k_aperture_filter=U_crittenden).k(kappa, w)   # aperture mass of kappa
+```
+
+For every scale θ the centres are the pixels of `centre_nside` (default: the level whose pixel
+is closest to θ/2; `centre_nside=` sets it, one value or one per scale) whose aperture disc
+has a *coverage* -- the unmasked fraction of its map pixels, from the binary mask alone -- of
+at least `min_coverage`; `op.centres("g", i)` lists them. At each centre `g` measures
+$M_{\rm ap}$ and $M_\times$ (the $M_a$ kernel on the tangential and on the cross shear; the
+disc is `radius_factor` θ = 5 θ wide, `Q_crittenden` by default) and `k` the scalar field
+through a circular top hat of radius θ, the HEALPix pixel of the centre
+(`k_aperture_filter="healpix"`, the masked `ud_grade` of the map) or a compensated filter $U$
+on the 5 θ discs. The per-aperture values are *bitwise* `Integrated3PCF.m_a` / `m_g` with the
+centres as patches (`aperture_nside` and the moment-carrying aperture cells included).
+
+The result holds sums over the accepted apertures -- unit weight each, as in the DES Y3
+moments analysis -- so results of several devices or footprints add with `+`: `n_apertures`,
+`count` (apertures whose disc holds weight in every tomographic bin), `power_sums` Σ x^k, `cross_sums`
+Σ x_i x_j / Σ x_i² x_j / Σ x_i x_j x_k, and with `edges` (fixed up front from the simulations,
+per scale and bin if wanted) the histogram with its `underflow`/`overflow`. `values=True`
+keeps the raw `(nz, n_apertures)` arrays per scale, e.g. to design the edges or for quantile
+estimators. `device=[0, 1]` splits the centres of every scale across GPUs. κ from shear
+(mass mapping) is not part of the package: produce κ upstream and pass it to `k`.
 
 ## Global (footprint-wide) estimators
 

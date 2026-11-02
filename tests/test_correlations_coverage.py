@@ -2154,8 +2154,9 @@ class TestCorrelationCoverage(unittest.TestCase):
         self.assertIs(captured_q_buffers[0][4], ctx.Q_offsets_dev)
         self.assertIs(captured_q_buffers[0][5], ctx.Q_patch_area_dev)
         self.assertIs(captured_q_buffers[1][0], ctx.Q_inds_dev)
+        (cached_k_dev,) = ctx.Q_val_k_dev.values()  # one filter cached
         for call in captured_q_buffers:  # the cached M_g geometry, both calls
-            for a, b in zip(call[6:10], ctx.Q_val_k_dev[1]):
+            for a, b in zip(call[6:10], cached_k_dev[1]):
                 self.assertIs(a, b)
 
     def test_compute_3x2pt_tomo_fused_reuses_cached_pair_index_buffers(self):

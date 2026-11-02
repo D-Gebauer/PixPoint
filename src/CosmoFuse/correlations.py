@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 _FINGERPRINT_MEMO: Dict[Any, Any] = {}
 #: Frozen row-space map memo bounds (see ``_coerce_map_input_array``).
 _FROZEN_MAP_MEMO_MAX_ENTRIES = 16
+# Device copies of scalar-aperture filter values kept per aperture geometry
+_MAX_K_FILTER_DEVICE_CACHE = 4
 _FROZEN_MAP_MEMO_MAX_BYTES = 4 << 30
 
 
@@ -1087,8 +1089,14 @@ class Integrated3PCF:
         host = self._k_aperture_geometry(aperture_filter)
         ctx = self.compute_context
         # The values array identifies the geometry: each one is cached with
-        # its geometry and held here, so its identity cannot be reissued.
-        cached = ctx.Q_val_k_dev
+        # its geometry and held here, so its identity cannot be reissued.  A
+        # few filters are kept (8.0.0: ``OnePoint`` alternates a filter U
+        # with the unit filter of its Σw pass on the same discs), so switching
+        # between them does not re-upload the values every call.
+        cache = ctx.Q_val_k_dev
+        if cache is None:
+            cache = ctx.Q_val_k_dev = {}
+        cached = cache.get(id(host.values))
         if cached is not None and cached[0] is host.values:
             return cast(Tuple[Any, Any, Any, Any], cached[1])
         module = self.backend.module
@@ -1110,7 +1118,9 @@ class Integrated3PCF:
                 upload(host.offsets, np.int64),
                 upload(host.area, self.rotation_dtype),
             )
-        ctx.Q_val_k_dev = (host.values, dev)
+        while len(cache) >= _MAX_K_FILTER_DEVICE_CACHE:
+            cache.pop(next(iter(cache)))
+        cache[id(host.values)] = (host.values, dev)
         return dev
 
     def _get_selected_tomo_density_combination_indices(

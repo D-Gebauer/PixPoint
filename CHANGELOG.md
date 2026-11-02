@@ -113,14 +113,55 @@ analysis's job.
   the list is self-describing) and a reader asked for a different slop
   refuses the file like a different `resolution_factor`. Validated at 0 only
   (slop > 0 ships, the acceptance rule is gated, its science is not). The
-  split is a k ≤ 4 feature: at nside 1024 (DES Y3) it has 5–15× the pairs of
-  the static k = 4 list, 17 % of full resolution. With `pack_pairs=True` the
+  split is a k ≤ 4 feature: at nside 1024 (DES Y3) it has 2.6× (patches) to
+  10.8× (footprint) the pairs of the static k = 4 list and runs ~2× slower per
+  pair, so a map costs 56 instead of 9.8 ms on 69 patches and 2.7 instead of
+  0.12 s on the footprint (`benchmarks/edge_split/RESULTS.md`). With `pack_pairs=True` the
   pixel pairs of the split reach every bin, so a packed `(tile, bin)` row
   block of `Global2PCF` holds the pixel rows of the tile's whole halo: more
   than 65536 rows at nside ≥ 1024 for the default tiles (pass a larger
   `tile_nside`) and at nside 2048 for θ_max ≳ 150′ whatever the tiles
   (`pack_pairs=False` there); patches are never affected. Gates:
   `tests/test_edge_split.py`.
+- **One-point statistics: `OnePoint`** (`CosmoFuse/onepoint.py`, stage D).
+  A fourth estimator, pair-free: the distribution of an aperture field over
+  the footprint. `OnePoint(nside, mask, scales, ...)` puts a centre on every
+  `centre_nside` pixel (default: the level whose pixel is closest to θ/2)
+  whose disc coverage -- the unmasked fraction of its map pixels, from the
+  binary mask, independent of the weights and of `aperture_nside` -- is at
+  least `min_coverage` (0.8), and measures per scale and tomographic bin
+  `g(shear, w)`: the aperture mass `M_ap` and its cross component `M_x`
+  (`cross=False` skips it), and `k(maps, w)`: κ or δ through a circular top
+  hat of radius θ (default), the HEALPix-pixel top hat of the centre pixel
+  (`k_aperture_filter="healpix"`, = the masked `ud_grade`) or a filter U on
+  the 5 θ discs. The values are the `M_a` / `M_g` of an `Integrated3PCF`
+  whose patches are the centres -- the same kernels, bitwise, with
+  `aperture_nside` and the moment-carrying aperture cells included -- and
+  `M_x` is the tangential kernel on the swapped components `(γ_2, −γ_1)`,
+  exact by construction (one more pass over the discs, no new kernel). The
+  reduction (on the backend's array module) returns an `OnePointResult` of
+  *sums* over the apertures, unit weight each (the DES Y3 moments convention;
+  the aperture value is already normalised by its Σ w): a histogram on fixed,
+  user-given edges (half-open bins, under/overflow reported; `edges` on the
+  constructor or per call, per scale and bin), the raw moments Σ x^k for
+  k = 1..5 and the tomographic cross moments Σ x_i x_j, Σ x_i² x_j,
+  Σ x_i x_j x_k, with `moments()`, `central_moments()`, `cross_moments()`,
+  `pdf()` formed on access and `+` adding devices or footprints; an aperture
+  whose disc holds no weight in one of the bins (Σ w = 0 there, found from
+  the weights alone in one extra pass over the discs -- the kernels return
+  NaN or 0 for it depending on the backend) is left out of every bin and
+  `count` says how many entered; `values=True` keeps the raw `(nz,
+  n_apertures)` arrays. `device=[...]` splits the centres of every scale by
+  disc size. Mass mapping is not part of it: κ comes from upstream. Gates
+  (`tests/test_onepoint.py`): values ≡ `m_a` / `m_g` bitwise (full and coarse
+  apertures), `M_x` ≡ an independent projection ≤ 1e-12, reduction ≡ numpy
+  ≤ 1e-12, pixel top hat ≡ masked `ud_grade`, coverage, two devices ≡ one,
+  emulated GPU ≡ CPU, and the real-GPU gate `benchmarks/onepoint/gpu_gate.py`.
+  Timing (A100, nside 1024, `benchmarks/onepoint/RESULTS.md`): `g` 12–13 ms
+  per scale without `M_x`, 20–22 ms with it, `k` 7–10 ms, of which ~6 ms is the
+  reduction floor and ~2 ms the Σw pass; `aperture_nside` with quad cells at nz = 4 saves memory
+  (4×/16×) but no time (the cell moments are 192 B per disc entry). Prices of
+  the windows on the PDF: pending.
 - **Surface that was not the estimator's, removed.** `Integrated3PCF.zeta_*`
   (8 methods) and `Integrated3PCF.calculate_all_zetas` were pass-throughs to
   the `correlation_helpers` functions, duplicated by `IntegratedResult.zetas()`;

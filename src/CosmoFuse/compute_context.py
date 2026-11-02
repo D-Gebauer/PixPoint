@@ -141,7 +141,7 @@ class ComputeContext:
         ("Q_val_dev", None),
         ("Q_offsets_dev", None),
         ("Q_patch_area_dev", None),
-        # (host U values, device copy)
+        # {id(host U values): (host U values, device copy)}, a few filters
         ("Q_val_k_dev", None),
     )
     # Pre-allocated output buffers for the fused kernel (M_ap, M_g,

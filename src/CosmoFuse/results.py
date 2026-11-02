@@ -11,17 +11,20 @@ caller has to know.
 * :class:`TwoPointResult` -- summed numerators and weights of
   :class:`~CosmoFuse.global_2pcf.Global2PCF`;
 * :class:`ThreePointResult` -- multipole sums of
-  :class:`~CosmoFuse.global_3pcf.Global3PCF`.
+  :class:`~CosmoFuse.global_3pcf.Global3PCF`;
+* :class:`OnePointResult` -- histogram and moment sums of
+  :class:`~CosmoFuse.onepoint.OnePoint`.
 
-The two global results hold *sums* (numerators and weights), so results of
+The global and one-point results hold *sums* (numerators and weights), so results of
 different devices, footprints or chunks add with ``+``; the estimate is formed
 on access.  Array fields may live on the host (numpy) or the device (cupy),
 following the measurement's ``return_device``.
 """
 
+import itertools
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -286,3 +289,157 @@ class ThreePointResult:
                 val = np.where(den != 0, num / den, 0.0)
             out[comp.label] = val
         return out
+
+
+# ── OnePoint ──────────────────────────────────────────────────────────────
+
+# Raw-moment orders the one-point reduction accumulates: Σ x^k, k = 1..5.
+ONEPOINT_POWERS = 5
+
+
+def onepoint_cross_index(nz: int) -> Dict[str, Tuple[Tuple[int, ...], ...]]:
+    """Tomographic index tuples of the cross moments: ``"ij"`` ⟨x_i x_j⟩ for
+    i < j, ``"iij"`` ⟨x_i² x_j⟩ for i ≠ j, ``"ijk"`` ⟨x_i x_j x_k⟩ for
+    i < j < k (the moment set of the DES Y3 moments analysis)."""
+    z = range(int(nz))
+    return {
+        "ij": tuple(itertools.combinations(z, 2)),
+        "iij": tuple((i, j) for i in z for j in z if i != j),
+        "ijk": tuple(itertools.combinations(z, 3)),
+    }
+
+
+def _ratio(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+    """``num / den`` broadcast, 0 where ``den`` is 0."""
+    num = np.asarray(num, dtype=np.float64)
+    den = np.asarray(den, dtype=np.float64)
+    out = np.zeros(np.broadcast_shapes(num.shape, den.shape), dtype=np.float64)
+    den_b = np.broadcast_to(den, out.shape)
+    np.divide(np.broadcast_to(num, out.shape), den_b, out=out, where=den_b != 0)
+    return out
+
+
+@dataclass
+class OnePointResult:
+    """One-point statistics of aperture fields, as *sums over apertures*.
+
+    ``statistic``: ``"g"`` (fields ``M_ap`` and ``M_x``, the tangential and
+    cross aperture mass) or ``"k"`` (field ``k``, the filtered scalar field).
+    Every array is host float64 and a sum over the accepted apertures of
+    each scale, so results of different devices or footprints add with
+    ``+``; the estimates are formed on access.
+
+    * ``scales`` -- the aperture scales θ (arcmin), ``(nscale,)``;
+    * ``n_apertures`` -- accepted centres per scale, ``(nscale,)``;
+    * ``count[name]`` -- apertures that entered the sums (weight ``Σ w > 0``
+      and a finite value in every tomographic bin), ``(nscale,)``;
+    * ``power_sums[name]`` -- Σ x^k, k = 1..5, ``(nz, nscale, 5)``;
+    * ``cross_sums[name][key]`` -- Σ x_i x_j (``"ij"``), Σ x_i² x_j
+      (``"iij"``), Σ x_i x_j x_k (``"ijk"``) over the tomographic tuples
+      ``cross_index[key]``, ``(ncomb, nscale)``;
+    * ``edges`` -- histogram edges ``(nz, nscale, nbins + 1)``; ``hist[name]``
+      ``(nz, nscale, nbins)`` counts on the half-open bins ``[e_b, e_b+1)``,
+      ``underflow[name]`` / ``overflow[name]`` ``(nz, nscale)`` the values
+      below the first / at or above the last edge (all ``None`` without
+      edges);
+    * ``values[name]`` -- the raw per-aperture values, one ``(nz,
+      n_apertures)`` array per scale, when asked for (``values=True``).
+    """
+
+    statistic: str
+    scales: np.ndarray
+    names: Tuple[str, ...]
+    n_apertures: np.ndarray
+    count: Dict[str, np.ndarray]
+    power_sums: Dict[str, np.ndarray]
+    cross_sums: Dict[str, Dict[str, np.ndarray]]
+    cross_index: Dict[str, Tuple[Tuple[int, ...], ...]]
+    edges: Optional[np.ndarray] = None
+    hist: Optional[Dict[str, np.ndarray]] = None
+    underflow: Optional[Dict[str, np.ndarray]] = None
+    overflow: Optional[Dict[str, np.ndarray]] = None
+    values: Optional[Dict[str, List[np.ndarray]]] = None
+
+    @property
+    def nz(self) -> int:
+        return int(next(iter(self.power_sums.values())).shape[0])
+
+    @property
+    def nscale(self) -> int:
+        return int(np.asarray(self.scales).size)
+
+    def moments(self, name: str) -> np.ndarray:
+        """Raw moments ⟨x^k⟩, k = 1..5: ``(nz, nscale, 5)`` (0 without apertures)."""
+        return _ratio(self.power_sums[name], self.count[name][None, :, None])
+
+    def central_moments(self, name: str) -> np.ndarray:
+        """Central moments ⟨(x − ⟨x⟩)^k⟩, k = 2..5: ``(nz, nscale, 4)``."""
+        m = self.moments(name)
+        m1, m2, m3, m4, m5 = (m[..., k] for k in range(5))
+        c2 = m2 - m1**2
+        c3 = m3 - 3 * m1 * m2 + 2 * m1**3
+        c4 = m4 - 4 * m1 * m3 + 6 * m1**2 * m2 - 3 * m1**4
+        c5 = m5 - 5 * m1 * m4 + 10 * m1**2 * m3 - 10 * m1**3 * m2 + 4 * m1**5
+        return np.stack([c2, c3, c4, c5], axis=-1)
+
+    def cross_moments(self, name: str) -> Dict[str, np.ndarray]:
+        """``{"ij": ⟨x_i x_j⟩, "iij": ⟨x_i² x_j⟩, "ijk": ⟨x_i x_j x_k⟩}``, each
+        ``(ncomb, nscale)`` over ``cross_index``."""
+        return {
+            k: _ratio(v, self.count[name][None, :])
+            for k, v in self.cross_sums[name].items()
+        }
+
+    def pdf(self, name: str) -> np.ndarray:
+        """``hist / (count · bin width)``: ``(nz, nscale, nbins)``."""
+        if self.hist is None or self.edges is None:
+            raise ValueError("no histogram was measured: pass edges")
+        widths = np.diff(self.edges, axis=-1)
+        return _ratio(self.hist[name], self.count[name][None, :, None] * widths)
+
+    def __add__(self, other: "OnePointResult") -> "OnePointResult":
+        same_edges = (self.edges is None and other.edges is None) or (
+            self.edges is not None
+            and other.edges is not None
+            and np.array_equal(self.edges, other.edges)
+        )
+        if (
+            other.statistic != self.statistic
+            or other.names != self.names
+            or not np.array_equal(other.scales, self.scales)
+            or not same_edges
+        ):
+            raise ValueError(
+                "can only add one-point results of the same statistic, scales "
+                "and histogram edges"
+            )
+
+        def add(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> Any:
+            if a is None or b is None:
+                return None
+            return {k: a[k] + b[k] for k in a}
+
+        values = None
+        if self.values is not None and other.values is not None:
+            values = {
+                k: [
+                    np.concatenate((x, y), axis=1)
+                    for x, y in zip(self.values[k], other.values[k])
+                ]
+                for k in self.values
+            }
+        return OnePointResult(
+            self.statistic,
+            self.scales,
+            self.names,
+            self.n_apertures + other.n_apertures,
+            add(self.count, other.count),
+            add(self.power_sums, other.power_sums),
+            {k: add(self.cross_sums[k], other.cross_sums[k]) for k in self.cross_sums},
+            dict(self.cross_index),
+            self.edges,
+            add(self.hist, other.hist),
+            add(self.underflow, other.underflow),
+            add(self.overflow, other.overflow),
+            values,
+        )

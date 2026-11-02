@@ -144,9 +144,16 @@ def main():
             lambda: est.gg(shear, w, flip_g1=True, **gg_kw), sync
         )
         run["kg_ms"] = timed(lambda: est.kg(dens, shear, w, w), sync)
-        run["three_by_two_pt_ms"] = timed(
-            lambda: est.three_by_two_pt(shear, dens, weights=(w, w)), sync
-        )
+        # Integrated3PCF takes weights=(shear_w, k_w); Global2PCF takes
+        # shear_weights, k_weights positionally after the maps.
+        if isinstance(est, Global2PCF):
+            run["three_by_two_pt_ms"] = timed(
+                lambda: est.three_by_two_pt(shear, dens, w, w), sync
+            )
+        else:
+            run["three_by_two_pt_ms"] = timed(
+                lambda: est.three_by_two_pt(shear, dens, weights=(w, w)), sync
+            )
 
     if not args.skip_patches:
         for slop in (None, 0.0):

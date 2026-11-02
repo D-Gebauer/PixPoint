@@ -8,20 +8,20 @@ caller has to know.
 
 * :class:`IntegratedResult` -- per-patch outputs of
   :class:`~CosmoFuse.correlations.Integrated3PCF` (the i3PCF ingredients);
-* :class:`TwoPointResult` -- per-tile sums of
+* :class:`TwoPointResult` -- summed numerators and weights of
   :class:`~CosmoFuse.global_2pcf.Global2PCF`;
 * :class:`ThreePointResult` -- multipole sums of
   :class:`~CosmoFuse.global_3pcf.Global3PCF`.
 
 The two global results hold *sums* (numerators and weights), so results of
-different tiles, chunks or devices add with ``+``; the estimate is formed on
-access.  Array fields may live on the host (numpy) or the device (cupy),
+different devices, footprints or chunks add with ``+``; the estimate is formed
+on access.  Array fields may live on the host (numpy) or the device (cupy),
 following the measurement's ``return_device``.
 """
 
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -110,20 +110,21 @@ class IntegratedResult:
 
 @dataclass
 class TwoPointResult:
-    """A footprint-wide 2PCF as per-tile sums.
+    """A footprint-wide 2PCF as sums over every pixel pair.
 
     ``statistic``: ``"gg"`` (fields ``xi_p``, ``xi_m``), ``"kk"`` (``xi``, =
-    w(θ)) or ``"kg"`` (``xi``, = γ_t).  ``tile_num[name]`` and
-    ``tile_weight``: ``(ncomb, n_tiles, nbins)``; rows labelled by
-    ``combinations``.  The estimate is the ratio of the sums over tiles;
-    :meth:`jackknife` gives the delete-one-tile estimates.
+    w(θ)) or ``"kg"`` (``xi``, = γ_t).  ``num[name]`` and ``weight``:
+    ``(ncomb, nbins)`` float64 sums of ``w_i w_j f_i f_j`` and of ``w_i w_j``
+    over the pairs of every bin; rows labelled by ``combinations``.  The
+    estimate is their ratio (``estimate``, or the field properties).  Results
+    of different devices or footprints add with ``+``.
     """
 
     statistic: str
     binedges: np.ndarray
     combinations: Combinations
-    tile_num: Dict[str, Any]
-    tile_weight: Any
+    num: Dict[str, Any]
+    weight: Any
 
     @property
     def theta(self) -> np.ndarray:
@@ -132,26 +133,12 @@ class TwoPointResult:
 
     @property
     def names(self) -> Tuple[str, ...]:
-        return tuple(self.tile_num)
-
-    @property
-    def n_tiles(self) -> int:
-        return int(self.tile_weight.shape[1])
-
-    @property
-    def weight(self) -> Any:
-        """Sum of pair weights per (combination, bin)."""
-        xp = _xp(self.tile_weight)
-        return self.tile_weight.astype(xp.float64).sum(axis=1)
-
-    def num(self, name: str) -> Any:
-        xp = _xp(self.tile_num[name])
-        return self.tile_num[name].astype(xp.float64).sum(axis=1)
+        return tuple(self.num)
 
     def estimate(self, name: str) -> Any:
-        """``sum_tiles num / sum_tiles weight`` (0 where no pairs)."""
-        xp = _xp(self.tile_weight)
-        return safe_divide(xp, self.num(name), self.weight)
+        """``num[name] / weight`` (0 where no pairs)."""
+        xp = _xp(self.weight)
+        return safe_divide(xp, self.num[name], self.weight)
 
     @property
     def xi_p(self) -> Any:
@@ -166,25 +153,11 @@ class TwoPointResult:
         return self._field("xi")
 
     def _field(self, name: str) -> Any:
-        if name not in self.tile_num:
+        if name not in self.num:
             raise AttributeError(
                 f"a {self.statistic!r} result holds {self.names}, not {name!r}"
             )
         return self.estimate(name)
-
-    def jackknife(self) -> Dict[str, Any]:
-        """Delete-one-tile estimates, ``name -> (n_tiles, ncomb, nbins)``."""
-        xp = _xp(self.tile_weight)
-        w_all = self.weight
-        w_t = self.tile_weight.astype(xp.float64)
-        out = {}
-        for name in self.names:
-            n_all = self.num(name)
-            n_t = self.tile_num[name].astype(xp.float64)
-            num = n_all[:, None, :] - n_t
-            den = w_all[:, None, :] - w_t
-            out[name] = xp.moveaxis(safe_divide(xp, num, den), 1, 0)
-        return out
 
     def to_numpy(self) -> "TwoPointResult":
         def host(a: Any) -> np.ndarray:
@@ -198,8 +171,8 @@ class TwoPointResult:
             self.statistic,
             self.binedges,
             self.combinations,
-            {k: host(v) for k, v in self.tile_num.items()},
-            host(self.tile_weight),
+            {k: host(v) for k, v in self.num.items()},
+            host(self.weight),
         )
 
     def __add__(self, other: "TwoPointResult") -> "TwoPointResult":
@@ -209,16 +182,12 @@ class TwoPointResult:
             or not np.array_equal(other.binedges, self.binedges)
         ):
             raise ValueError("can only add results of the same statistic and binning")
-        xp = _xp(self.tile_weight)
         return TwoPointResult(
             self.statistic,
             self.binedges,
             self.combinations,
-            {
-                k: xp.concatenate((v, other.tile_num[k]), axis=1)
-                for k, v in self.tile_num.items()
-            },
-            xp.concatenate((self.tile_weight, other.tile_weight), axis=1),
+            {k: v + other.num[k] for k, v in self.num.items()},
+            self.weight + other.weight,
         )
 
 
@@ -316,39 +285,4 @@ class ThreePointResult:
             with np.errstate(divide="ignore", invalid="ignore"):
                 val = np.where(den != 0, num / den, 0.0)
             out[comp.label] = val
-        return out
-
-    def to_centroid(
-        self,
-        binned: Mapping[str, np.ndarray],
-        phi_edges: Optional[np.ndarray] = None,
-        nphi: int = 16,
-    ) -> Dict[str, np.ndarray]:
-        """Convert :meth:`binned` values from the x- to the centroid
-        projection (every spin-2 value projected along the line from the
-        triangle's centroid).  Flat-sky triangle at the bin centres."""
-        if phi_edges is None:
-            phi_edges = np.linspace(-np.pi, np.pi, nphi + 1)
-        phi = 0.5 * (np.asarray(phi_edges[:-1]) + np.asarray(phi_edges[1:]))
-        t = self.theta
-        t2 = t[:, None, None]
-        t3 = t[None, :, None]
-        v1 = np.zeros((t.size, t.size, phi.size), dtype=np.complex128)
-        v2 = t2 + 0j * t3 * phi
-        v3 = t3 * np.exp(1j * phi)[None, None, :] + 0 * t2
-        cen = (v1 + v2 + v3) / 3.0
-        alpha = [np.angle(v - cen) for v in (v1, v2, v3)]
-        beta = [
-            np.zeros_like(alpha[0]),
-            np.zeros_like(alpha[0]),
-            np.broadcast_to(phi, alpha[0].shape),
-        ]
-        out = {}
-        for comp in self.components:
-            phase = np.zeros(alpha[0].shape)
-            for v in range(3):
-                s = self.spins[comp.fields[v]]
-                sign = -1.0 if comp.conj[v] else 1.0
-                phase = phase - sign * s * (alpha[v] - beta[v])
-            out[comp.label] = binned[comp.label] * np.exp(1j * phase)
         return out

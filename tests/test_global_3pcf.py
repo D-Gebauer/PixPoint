@@ -303,21 +303,6 @@ class TestBinning(unittest.TestCase):
         self.assertLess(errs[2], errs[0])
         self.assertLess(errs[2], 0.02 * np.abs(direct).max())
 
-    def test_centroid_is_a_phase(self):
-        mask, g, w, d = _setup()
-        est = _estimator(mask)
-        res = est.ggg(g, w)
-        edges = np.linspace(-np.pi, np.pi, 9)
-        b = res.binned(edges)
-        cen = res.to_centroid(b, edges)
-        for label in b:
-            np.testing.assert_allclose(
-                np.abs(cen[label]), np.abs(b[label]), rtol=1e-12, atol=0
-            )
-        dres = est.kkk(d, w)
-        db = dres.binned(edges)
-        np.testing.assert_array_equal(dres.to_centroid(db, edges)["zeta"], db["zeta"])
-
     def test_sum_of_results(self):
         mask, g, w, _ = _setup()
         est = _estimator(mask)

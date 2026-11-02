@@ -8,8 +8,7 @@ finder) and one group instead of many tiles.
 G1  == one-patch Integrated3PCF for xi+- (gg), w(theta) (kk), gamma_t (kg),
     for several tilings (tile invariance), at full resolution, with the static
     treecode (global cells == the one patch's cells) and with packed pairs.
-G2  the result's per-tile sums, jackknife, row labels and ``+``;
-    three_by_two_pt == its parts.
+G2  the result's sums, row labels and ``+``; three_by_two_pt == its parts.
 G3  row-space input == full-sky input (bitwise).
 G4  pair files round-trip bitwise and refuse a different estimator.
 G5  GPU orchestration (tiled and packed kernels) via the numpy twins == CPU.
@@ -35,6 +34,12 @@ NSIDE = 64
 CENTRE = (np.radians(60.0), np.radians(30.0))  # (theta, phi)
 RADIUS = 8.0  # degrees
 BINS = dict(nbins=5, theta_min=60, theta_max=480)
+
+
+def _assert_close_sums(got, want, tol=1e-13):
+    """Sums that differ only by the order of a final add (several devices):
+    relative to the largest sum, not elementwise (bins can cancel)."""
+    np.testing.assert_allclose(got, want, rtol=0, atol=tol * np.abs(want).max())
 
 
 def _setup():
@@ -211,34 +216,30 @@ class TestResultsAndInputs(unittest.TestCase):
         self.assertEqual(res.statistic, "gg")
         self.assertEqual(res.names, ("xi_p", "xi_m"))
         self.assertEqual(res.combinations, ((0, 0), (0, 1), (1, 1)))
-        self.assertEqual(res.tile_num["xi_p"].shape, (3, self.g.n_tiles, BINS["nbins"]))
+        self.assertEqual(res.num["xi_p"].shape, (3, BINS["nbins"]))
+        self.assertEqual(res.weight.shape, (3, BINS["nbins"]))
+        self.assertEqual(res.num["xi_p"].dtype, np.float64)
         np.testing.assert_allclose(res.theta, self.g.bincenters, rtol=1e-12)
         ok = res.weight > 0
         np.testing.assert_allclose(
-            (res.tile_num["xi_p"].sum(1) / np.where(ok, res.weight, 1))[ok],
+            (res.num["xi_p"] / np.where(ok, res.weight, 1))[ok],
             res.xi_p[ok],
             rtol=1e-12,
         )
+        self.assertFalse(np.any(res.xi_p[~ok]))
         with self.assertRaises(AttributeError):
             res.xi
 
-    def test_jackknife(self):
-        res = self.g.kk(self.dens, self.w, return_device=False)
-        jk = res.jackknife()["xi"]
-        self.assertEqual(jk.shape, (self.g.n_tiles, 3, BINS["nbins"]))
-        t = 2
-        num = res.tile_num["xi"].sum(1) - res.tile_num["xi"][:, t]
-        den = res.tile_weight.sum(1) - res.tile_weight[:, t]
-        ok = den > 0
-        np.testing.assert_allclose(
-            jk[t][ok], (num / np.where(ok, den, 1))[ok], rtol=1e-12
-        )
-
-    def test_add_joins_tiles(self):
+    def test_add_sums(self):
         res = self.g.gg(self.shear, self.w, return_device=False)
         both = res + res
-        self.assertEqual(both.n_tiles, 2 * res.n_tiles)
+        for name in res.names:
+            np.testing.assert_array_equal(both.num[name], 2 * res.num[name])
+        np.testing.assert_array_equal(both.weight, 2 * res.weight)
         np.testing.assert_allclose(both.xi_p, res.xi_p, rtol=1e-13)
+        other = self.g.kk(self.dens, self.w, return_device=False)
+        with self.assertRaises(ValueError):
+            res + other
 
     def test_three_by_two_pt(self):
         out = self.g.three_by_two_pt(
@@ -250,9 +251,8 @@ class TestResultsAndInputs(unittest.TestCase):
         self.assertEqual(set(out), {"gg", "kk", "kg"})
         for key, res in out.items():
             for name in res.names:
-                np.testing.assert_array_equal(
-                    res.tile_num[name], ref[key].tile_num[name]
-                )
+                np.testing.assert_array_equal(res.num[name], ref[key].num[name])
+            np.testing.assert_array_equal(res.weight, ref[key].weight)
 
     def test_row_space_input(self):
         g = self.g
@@ -261,8 +261,8 @@ class TestResultsAndInputs(unittest.TestCase):
             g.to_row_space(self.shear), g.to_row_space(self.w), return_device=False
         )
         for name in full.names:
-            np.testing.assert_array_equal(full.tile_num[name], rows.tile_num[name])
-        np.testing.assert_array_equal(full.tile_weight, rows.tile_weight)
+            np.testing.assert_array_equal(full.num[name], rows.num[name])
+        np.testing.assert_array_equal(full.weight, rows.weight)
 
 
 class TestPairFiles(unittest.TestCase):
@@ -362,8 +362,8 @@ class TestHostPacking(unittest.TestCase):
         a = self.device_packed.gg(self.shear, self.w, return_device=False)
         b = self.host_packed.gg(self.shear, self.w, return_device=False)
         for name in a.names:
-            np.testing.assert_array_equal(a.tile_num[name], b.tile_num[name])
-        np.testing.assert_array_equal(a.tile_weight, b.tile_weight)
+            np.testing.assert_array_equal(a.num[name], b.num[name])
+        np.testing.assert_array_equal(a.weight, b.weight)
 
     def test_pair_files(self):
         import h5py
@@ -404,9 +404,10 @@ class TestHostPacking(unittest.TestCase):
                     got = g.gg(self.shear, self.w, return_device=False)
                     want = self.host_packed.gg(self.shear, self.w, return_device=False)
                     for name in want.names:
-                        np.testing.assert_array_equal(
-                            got.tile_num[name], want.tile_num[name]
-                        )
+                        if devices == "cpu":
+                            np.testing.assert_array_equal(got.num[name], want.num[name])
+                        else:
+                            _assert_close_sums(got.num[name], want.num[name])
                     g.save_pairs(os.path.join(tmp, "again.h5"))
                     with (
                         h5py.File(os.path.join(tmp, "again.h5"), "r") as fp,
@@ -432,7 +433,8 @@ class TestHostPacking(unittest.TestCase):
         g.preprocess()
         a = g.kk(self.dens, self.w, return_device=False)
         b = self.host_packed.kk(self.dens, self.w, return_device=False)
-        np.testing.assert_array_equal(a.tile_num["xi"], b.tile_num["xi"])
+        _assert_close_sums(a.num["xi"], b.num["xi"])
+        _assert_close_sums(a.weight, b.weight)
 
 
 class TestEmulatedGPU(unittest.TestCase):

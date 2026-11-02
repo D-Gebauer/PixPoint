@@ -11,17 +11,9 @@ import healpy as hp
 import numpy as np
 from scipy.special import binom
 
-import CosmoFuse.correlations as correlations_module
 from CosmoFuse.correlation_helpers import Q_crittenden
-from CosmoFuse.correlation_helpers import zeta_a_g as helper_zeta_a_g
-from CosmoFuse.correlation_helpers import zeta_a_minus as helper_zeta_a_minus
-from CosmoFuse.correlation_helpers import zeta_a_plus as helper_zeta_a_plus
-from CosmoFuse.correlation_helpers import zeta_a_t as helper_zeta_a_t
-from CosmoFuse.correlation_helpers import zeta_g_g as helper_zeta_g_g
-from CosmoFuse.correlation_helpers import zeta_g_minus as helper_zeta_g_minus
-from CosmoFuse.correlation_helpers import zeta_g_plus as helper_zeta_g_plus
-from CosmoFuse.correlation_helpers import zeta_g_t as helper_zeta_g_t
 from CosmoFuse.correlations import Integrated3PCF
+from CosmoFuse.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -124,11 +116,9 @@ class TestCorrelationCoverage(unittest.TestCase):
         restored.__setstate__(state)
 
         self.assertIsNotNone(restored.backend)
-        self.assertIsNotNone(restored.aperture_shear_all_patches)
         self.assertIsNotNone(restored._pair_finder)
         np.testing.assert_array_equal(restored.map_mask, corr.map_mask)
         self.assertEqual(restored.compute_context.prepare_version, 0)
-        self.assertIsNone(restored.compute_context._tomo_sumofweights_cache)
         self.assertIsNone(restored.compute_context._xipm_sumofweights_cache)
         self.assertEqual(restored.compute_context.tomo_combination_cache, {})
         self.assertIsNone(restored.Q_inds_flat)
@@ -138,7 +128,7 @@ class TestCorrelationCoverage(unittest.TestCase):
         corr = self._make_small_cpu_corr()
 
         self.assertEqual(
-            corr.aperture_filter_key(Q_crittenden),
+            PairGeometry.aperture_filter_key(Q_crittenden),
             "Q_crittenden",
         )
 
@@ -147,9 +137,9 @@ class TestCorrelationCoverage(unittest.TestCase):
 
         # not "Q_crittenden", and -- crucially -- not id(), which a
         # collected filter's successor would reuse
-        key = corr.aperture_filter_key(custom_filter)
+        key = PairGeometry.aperture_filter_key(custom_filter)
         self.assertNotEqual(key, "Q_crittenden")
-        self.assertEqual(key, corr.aperture_filter_key(custom_filter))
+        self.assertEqual(key, PairGeometry.aperture_filter_key(custom_filter))
         vals = corr._evaluate_aperture_filter(
             custom_filter, np.array([1.0], dtype=np.float64)
         )
@@ -229,10 +219,10 @@ class TestCorrelationCoverage(unittest.TestCase):
         corr.pair_exp2phi = None
         corr.bins = None
 
-        corr.inds_dev = np.zeros((2, 1), dtype=np.uint32)
-        corr.exp2phi_dev = np.zeros((2, 1), dtype=np.complex128)
-        corr.bins_dev = np.zeros(1, dtype=np.uint32)
-        corr.tot_bins_reduceat_dev = np.zeros(1, dtype=np.int64)
+        corr.compute_context.inds_dev = np.zeros((2, 1), dtype=np.uint32)
+        corr.compute_context.exp2phi_dev = np.zeros((2, 1), dtype=np.complex128)
+        corr.compute_context.bins_dev = np.zeros(1, dtype=np.uint32)
+        corr.compute_context.tot_bins_reduceat_dev = np.zeros(1, dtype=np.int64)
 
         prepare_version_before = corr.compute_context.prepare_version
         corr.prepare()
@@ -433,7 +423,7 @@ class TestCorrelationCoverage(unittest.TestCase):
 
     def test_kk_methods_prepare_on_demand(self):
         corr = self._make_small_cpu_corr()
-        corr.inds_dev = None
+        corr.compute_context.inds_dev = None
 
         with patch.object(corr, "prepare", wraps=corr.prepare) as spy_prepare:
             corr._kk_single(
@@ -445,7 +435,7 @@ class TestCorrelationCoverage(unittest.TestCase):
             )
             spy_prepare.assert_called_once()
 
-        corr.inds_dev = None
+        corr.compute_context.inds_dev = None
         with patch.object(corr, "prepare", wraps=corr.prepare) as spy_prepare:
             corr._kg_single(
                 np.ones(12, dtype=np.float64),
@@ -482,9 +472,6 @@ class TestCorrelationCoverage(unittest.TestCase):
                 corr.gg(
                     shear_maps,
                     w,
-                    sumofweights=np.ones(
-                        (2, 3, corr.n_patches * corr.nbins), dtype=np.float64
-                    ),
                     flip_g1=True,
                     flip_g2=False,
                     apertures=False,
@@ -505,8 +492,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         shear_w = np.ones((2, 12), dtype=np.float64)
         dd_out = np.full((3, corr.n_patches, corr.nbins), 7.0, dtype=np.float64)
         ds_out = np.full((4, corr.n_patches, corr.nbins), 9.0, dtype=np.float64)
-        dd_sum = np.arange(3, dtype=np.float64)
-        ds_sum = np.arange(4, dtype=np.float64)
 
         with (
             patch.object(
@@ -537,27 +522,12 @@ class TestCorrelationCoverage(unittest.TestCase):
             out_dd_none = corr.kk(density_maps, density_w, apertures=False).xi_g
             out_ds_none = corr.kg(density_maps, shear_maps, density_w, shear_w).xi_t
 
-            out_dd_explicit = corr.kk(
-                density_maps, density_w, sumofweights=dd_sum, apertures=False
-            ).xi_g
-            out_ds_explicit = corr.kg(
-                density_maps, shear_maps, density_w, shear_w, sumofweights=ds_sum
-            ).xi_t
-
         self.assertEqual(out_dd_none.shape, (3, corr.n_patches, corr.nbins))
         self.assertEqual(out_ds_none.shape, (4, corr.n_patches, corr.nbins))
-        self.assertEqual(out_dd_explicit.shape, (3, corr.n_patches, corr.nbins))
-        self.assertEqual(out_ds_explicit.shape, (4, corr.n_patches, corr.nbins))
         np.testing.assert_allclose(out_dd_none, dd_out)
         np.testing.assert_allclose(out_ds_none, ds_out)
-        np.testing.assert_allclose(out_dd_explicit, dd_out)
-        np.testing.assert_allclose(out_ds_explicit, ds_out)
-        self.assertEqual(spy_dd.call_count, 2)
-        self.assertEqual(spy_ds.call_count, 2)
-        self.assertIsNone(spy_dd.call_args_list[0].args[2])
-        self.assertIsNone(spy_ds.call_args_list[0].args[4])
-        np.testing.assert_array_equal(spy_dd.call_args_list[1].args[2], dd_sum)
-        np.testing.assert_array_equal(spy_ds.call_args_list[1].args[4], ds_sum)
+        self.assertEqual(spy_dd.call_count, 1)
+        self.assertEqual(spy_ds.call_count, 1)
 
     def test_density_density_auto_pairs_use_unique_term(self):
         corr = self._make_small_cpu_corr()
@@ -1014,7 +984,6 @@ class TestCorrelationCoverage(unittest.TestCase):
             shear_arg,
             density_w_arg,
             shear_w_arg,
-            sumofweights_arg,
             nlens_bins_arg,
             nsource_bins_arg,
             ggl_bin_combinations=None,
@@ -1056,7 +1025,6 @@ class TestCorrelationCoverage(unittest.TestCase):
             shear_arg,
             density_w_arg,
             shear_w_arg,
-            sumofweights_arg,
             nlens_bins_arg,
             nsource_bins_arg,
             ggl_bin_combinations=None,
@@ -1095,7 +1063,6 @@ class TestCorrelationCoverage(unittest.TestCase):
             shear_arg,
             density_w_arg,
             shear_w_arg,
-            sumofweights_arg,
             nlens_bins_arg,
             nsource_bins_arg,
             ggl_bin_combinations=None,
@@ -1196,113 +1163,6 @@ class TestCorrelationCoverage(unittest.TestCase):
                 ggl_bin_combinations=[(0, 2)],
             )
 
-    def test_normalize_tomo_sumofweights_per_comb_branches(self):
-        corr = self._make_small_cpu_corr()
-        nzbin_combs = 3
-
-        out_scalar = corr._normalize_tomo_sumofweights_per_comb(2.0, nzbin_combs)
-        self.assertEqual(corr.backend.to_numpy(out_scalar).shape, (3, 1))
-
-        out_1d_combs = corr._normalize_tomo_sumofweights_per_comb(
-            np.array([1.0, 2.0, 3.0], dtype=np.float64),
-            nzbin_combs,
-        )
-        self.assertEqual(corr.backend.to_numpy(out_1d_combs).shape, (3, 1))
-
-        out_1d_flat = corr._normalize_tomo_sumofweights_per_comb(
-            np.array([1.0, 2.0, 3.0], dtype=np.float64).reshape(-1),
-            nzbin_combs,
-        )
-        self.assertEqual(corr.backend.to_numpy(out_1d_flat).shape, (3, 1))
-
-        out_2d = corr._normalize_tomo_sumofweights_per_comb(
-            np.array([[1.0], [2.0], [3.0]], dtype=np.float64),
-            nzbin_combs,
-        )
-        self.assertEqual(corr.backend.to_numpy(out_2d).shape, (3, 1))
-
-        out_3d = corr._normalize_tomo_sumofweights_per_comb(
-            np.array([[[1.0]], [[2.0]], [[3.0]]], dtype=np.float64),
-            nzbin_combs,
-        )
-        self.assertEqual(corr.backend.to_numpy(out_3d).shape, (3, 1))
-
-        corr_nbins2 = Integrated3PCF(
-            nside=1,
-            phi_center=np.array([0.0]),
-            theta_center=np.array([0.0]),
-            nbins=2,
-            theta_min=1.0,
-            theta_max=2.0,
-            patch_size=1.0,
-            theta_Q=1.0,
-            device="cpu",
-        )
-        out_single_flat = corr_nbins2._normalize_tomo_sumofweights_per_comb(
-            np.array([4.0, 5.0], dtype=np.float64),
-            1,
-        )
-        self.assertEqual(corr_nbins2.backend.to_numpy(out_single_flat).shape, (1, 2))
-
-        out_single_2d = corr_nbins2._normalize_tomo_sumofweights_per_comb(
-            np.array([[6.0, 7.0]], dtype=np.float64),
-            1,
-        )
-        self.assertEqual(corr_nbins2.backend.to_numpy(out_single_2d).shape, (1, 2))
-
-        corr_two_patches = Integrated3PCF(
-            nside=1,
-            phi_center=np.array([0.0, 1.0]),
-            theta_center=np.array([0.0, 0.5]),
-            nbins=1,
-            theta_min=1.0,
-            theta_max=2.0,
-            patch_size=1.0,
-            theta_Q=1.0,
-            device="cpu",
-        )
-        out_flat_full = corr_two_patches._normalize_tomo_sumofweights_per_comb(
-            np.arange(6, dtype=np.float64),
-            3,
-        )
-        self.assertEqual(corr_two_patches.backend.to_numpy(out_flat_full).shape, (3, 2))
-
-        out_single_patchbin = corr_two_patches._normalize_tomo_sumofweights_per_comb(
-            np.array([[8.0], [9.0]], dtype=np.float64),
-            1,
-        )
-        self.assertEqual(
-            corr_two_patches.backend.to_numpy(out_single_patchbin).shape, (1, 2)
-        )
-
-        with self.assertRaisesRegex(ValueError, "sumofweights must be scalar"):
-            corr_nbins2._normalize_tomo_sumofweights_per_comb(
-                np.ones((2, 2), dtype=np.float64),
-                1,
-            )
-
-    def test_normalize_tomo_sumofweights_directional_branches(self):
-        corr = Integrated3PCF(
-            nside=1,
-            phi_center=np.array([0.0]),
-            theta_center=np.array([0.0]),
-            nbins=2,
-            theta_min=1.0,
-            theta_max=2.0,
-            patch_size=1.0,
-            theta_Q=1.0,
-            device="cpu",
-        )
-
-        directional = np.array([[[1.0, 2.0]], [[3.0, 4.0]]], dtype=np.float64)
-        out_dir = corr._normalize_tomo_sumofweights_directional(directional, 1)
-        self.assertEqual(corr.backend.to_numpy(out_dir).shape, (2, 1, 2))
-
-        out_shared = corr._normalize_tomo_sumofweights_directional(5.0, 1)
-        shared_np = corr.backend.to_numpy(out_shared)
-        self.assertEqual(shared_np.shape, (2, 1, 2))
-        np.testing.assert_allclose(shared_np[0], shared_np[1])
-
     def test_density_density_tomo_vectorized_prepare_and_missing_kernel(self):
         corr = self._make_small_cpu_corr()
         density_maps = np.ones((2, 12), dtype=np.float64)
@@ -1310,12 +1170,11 @@ class TestCorrelationCoverage(unittest.TestCase):
         nzbins = 2
         nzbin_combs = int(binom(nzbins + 1, 2))
 
-        corr.inds_dev = None
+        corr.compute_context.inds_dev = None
         with patch.object(corr, "prepare", wraps=corr.prepare) as spy_prepare:
             out = corr._density_density_tomo_vectorized(
                 density_maps,
                 weights,
-                None,
                 nzbins,
                 False,
             )
@@ -1327,7 +1186,6 @@ class TestCorrelationCoverage(unittest.TestCase):
             corr._density_density_tomo_vectorized(
                 density_maps,
                 weights,
-                None,
                 nzbins,
                 False,
             )
@@ -1366,7 +1224,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         out = corr._density_density_tomo_vectorized(
             density_maps,
             weights,
-            np.ones((2, nzbin_combs, corr.n_patches, corr.nbins), dtype=np.float64),
             nzbins,
             False,
         )
@@ -1381,7 +1238,6 @@ class TestCorrelationCoverage(unittest.TestCase):
             corr._density_density_tomo_vectorized(
                 density_maps,
                 weights,
-                np.ones((2, nzbin_combs, corr.n_patches, corr.nbins), dtype=np.float64),
                 nzbins,
                 False,
             )
@@ -1393,7 +1249,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         out = corr._density_density_tomo_vectorized(
             density_maps,
             weights,
-            None,
             2,
             True,
         )
@@ -1408,14 +1263,13 @@ class TestCorrelationCoverage(unittest.TestCase):
         nlens_bins = 2
         nsource_bins = 2
 
-        corr.inds_dev = None
+        corr.compute_context.inds_dev = None
         with patch.object(corr, "prepare", wraps=corr.prepare) as spy_prepare:
             out = corr._density_shear_tomo_vectorized(
                 density_maps,
                 shear_maps,
                 density_w,
                 shear_w,
-                None,
                 nlens_bins,
                 nsource_bins,
             )
@@ -1429,7 +1283,6 @@ class TestCorrelationCoverage(unittest.TestCase):
                 shear_maps,
                 density_w,
                 shear_w,
-                None,
                 nlens_bins,
                 nsource_bins,
             )
@@ -1459,27 +1312,15 @@ class TestCorrelationCoverage(unittest.TestCase):
 
         corr = self._make_small_cpu_corr()
         corr.backend = FakeBackend()
-        out_dir = corr._density_shear_tomo_vectorized(
+        out = corr._density_shear_tomo_vectorized(
             density_maps,
             shear_maps,
             density_w,
             shear_w,
-            np.ones((2, 4, corr.n_patches, corr.nbins), dtype=np.float64),
             nlens_bins,
             nsource_bins,
         )
-        self.assertEqual(out_dir.shape, (4, corr.n_patches, corr.nbins))
-
-        out_per_comb = corr._density_shear_tomo_vectorized(
-            density_maps,
-            shear_maps,
-            density_w,
-            shear_w,
-            np.ones(4, dtype=np.float64),
-            nlens_bins,
-            nsource_bins,
-        )
-        self.assertEqual(out_per_comb.shape, (4, corr.n_patches, corr.nbins))
+        self.assertEqual(out.shape, (4, corr.n_patches, corr.nbins))
 
         corr.backend.kernel_density_shear_tomo_vectorized = staticmethod(
             lambda *_: False
@@ -1490,38 +1331,8 @@ class TestCorrelationCoverage(unittest.TestCase):
                 shear_maps,
                 density_w,
                 shear_w,
-                None,
                 nlens_bins,
                 nsource_bins,
-            )
-
-    def test_gg_sumofweights_validation_errors(self):
-        corr = self._make_small_cpu_corr()
-        shear_maps = np.ones((2, 2, 12), dtype=np.float64)
-        w = np.ones((2, 12), dtype=np.float64)
-
-        with self.assertRaisesRegex(ValueError, "at least two dimensions"):
-            fields_of(
-                corr.gg(
-                    shear_maps,
-                    w,
-                    sumofweights=np.array([1.0], dtype=np.float64),
-                    apertures=False,
-                ),
-                "xi_p",
-                "xi_m",
-            )
-
-        with self.assertRaisesRegex(ValueError, "first dimensions"):
-            fields_of(
-                corr.gg(
-                    shear_maps,
-                    w,
-                    sumofweights=np.ones((1, 3, 1), dtype=np.float64),
-                    apertures=False,
-                ),
-                "xi_p",
-                "xi_m",
             )
 
     def test_three_by_two_pt_raises_when_no_maps(self):
@@ -2061,7 +1872,7 @@ class TestCorrelationCoverage(unittest.TestCase):
 
     def test_compute_3x2pt_tomo_fused_prepare_and_flip_g2_branch(self):
         corr = self._make_small_cpu_corr()
-        corr.inds_dev = None
+        corr.compute_context.inds_dev = None
         captured = {}
 
         def fake_kernel(*args):
@@ -2176,7 +1987,6 @@ class TestCorrelationCoverage(unittest.TestCase):
             out = corr._density_density_tomo_vectorized(
                 density_maps,
                 weights,
-                sumofweights=None,
                 nzbins=2,
                 gc_auto_correlations_only=True,
             )
@@ -2185,35 +1995,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         # The CPU kernel now accumulates the denominators itself: no
         # separate gather+reduce passes over the pair list.
         self.assertEqual(spy_reduce.call_count, 0)
-
-        # In-kernel denominators must match the explicitly computed
-        # directional sums for the cross combination.
-        w_dev = corr._to_backend_array(
-            corr._coerce_map_input_array(weights), dtype=corr.map_dtype
-        )
-        sum_ab = corr._reduce_pairs(
-            w_dev[0][corr.inds_dev[0]] * w_dev[1][corr.inds_dev[1]]
-        )
-        sum_ba = corr._reduce_pairs(
-            w_dev[1][corr.inds_dev[0]] * w_dev[0][corr.inds_dev[1]]
-        )
-        nbins_total = corr.n_patches * corr.nbins
-        explicit = np.stack(
-            (sum_ab.reshape(1, nbins_total), sum_ba.reshape(1, nbins_total)), axis=0
-        )
-        with patch.object(
-            corr,
-            "_get_selected_tomo_density_combination_indices",
-            return_value=(comb_i, comb_j, auto, 1),
-        ):
-            out_explicit = corr._density_density_tomo_vectorized(
-                density_maps,
-                weights,
-                sumofweights=explicit,
-                nzbins=2,
-                gc_auto_correlations_only=True,
-            )
-        np.testing.assert_allclose(out, out_explicit, rtol=1e-12, atol=1e-14)
 
     @staticmethod
     def _fake_gpu_3x2pt(corr, aperture_kernel, pair_kernel=None):
@@ -2510,24 +2291,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         self.assertEqual(density_soa.shape, (12, 1))
         self.assertEqual(shear_soa.shape, (12, 1, 2))
 
-    def test_compute_aperture_shear_all_patches_helper(self):
-        vals = correlations_module._compute_aperture_shear_all_patches(
-            np.array([0, 1], dtype=np.uint32),
-            np.array([1.0, 1.0], dtype=np.float64),
-            np.array([0.0, 0.0], dtype=np.float64),
-            np.array([2.0, 2.0], dtype=np.float64),
-            np.array([0, 2], dtype=np.int64),
-            np.array([1.0, 3.0], dtype=np.float64),
-            np.array([0.0, 0.0], dtype=np.float64),
-            np.array([2.0, 4.0], dtype=np.float64),
-            np.array([5.0], dtype=np.float64),
-        )
-        gt = np.array([-1.0, -3.0])
-        expected = (
-            5.0 * np.sum(np.array([2.0, 4.0]) * gt * 2.0) / np.sum(np.array([2.0, 4.0]))
-        )
-        self.assertAlmostEqual(vals[0], expected)
-
     def test_kk_methods_non_numpy_backend_path(self):
         corr = self._make_small_cpu_corr()
 
@@ -2706,7 +2469,6 @@ class TestCorrelationCoverage(unittest.TestCase):
     def test_xipm_tomo_vectorized_backend_decline_and_missing_paths(self):
         shear_maps_dev = np.ones((2, 2, 12), dtype=np.float64)
         w_dev = np.ones((2, 12), dtype=np.float64)
-        sumofweights_dev = np.ones((2, 3, 1), dtype=np.float64)
 
         cases = [
             {
@@ -2749,7 +2511,6 @@ class TestCorrelationCoverage(unittest.TestCase):
                         corr._xipm_tomo_vectorized(
                             shear_maps_dev,
                             w_dev,
-                            sumofweights_dev,
                             2,
                             3,
                             1,
@@ -2759,7 +2520,6 @@ class TestCorrelationCoverage(unittest.TestCase):
                     result = corr._xipm_tomo_vectorized(
                         shear_maps_dev,
                         w_dev,
-                        sumofweights_dev,
                         2,
                         3,
                         1,
@@ -2790,11 +2550,11 @@ class TestCorrelationCoverage(unittest.TestCase):
             device="cpu",
         )
 
-        corr.inds_dev = np.array([[0, 1], [1, 2]], dtype=np.uint32)
-        corr.exp2phi_dev = np.ones((2, 2), dtype=np.complex128)
-        corr.bins_dev = np.array([2], dtype=np.uint32)
-        corr.tot_bins_reduceat_dev = np.array([0, 2], dtype=np.int64)
-        corr.ntotpairs = 2
+        corr.compute_context.inds_dev = np.array([[0, 1], [1, 2]], dtype=np.uint32)
+        corr.compute_context.exp2phi_dev = np.ones((2, 2), dtype=np.complex128)
+        corr.compute_context.bins_dev = np.array([2], dtype=np.uint32)
+        corr.compute_context.tot_bins_reduceat_dev = np.array([0, 2], dtype=np.int64)
+        corr.compute_context.ntotpairs = 2
 
         corr.Q_inds = [np.array([0], dtype=np.uint32)]
         corr.Q_cos = [np.array([1.0], dtype=np.float64)]
@@ -2807,7 +2567,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         shear_maps[0, 0, :3] = np.array([1.0, 2.0, 3.0])
         shear_maps[1, 0, :3] = np.array([4.0, 5.0, 6.0])
         w = np.ones((2, 12), dtype=np.float64)
-        sumofweights = np.full((2, 3, 1), 2.0, dtype=np.float64)
 
         called = {"value": False}
 
@@ -2849,7 +2608,7 @@ class TestCorrelationCoverage(unittest.TestCase):
         corr.backend.xipm_cross_corr_kernel = fused_kernel
 
         xip, xim = fields_of(
-            corr.gg(shear_maps, w, sumofweights=sumofweights, apertures=False),
+            corr.gg(shear_maps, w, apertures=False),
             "xi_p",
             "xi_m",
         )
@@ -3506,21 +3265,13 @@ class TestCorrelationCoverage(unittest.TestCase):
         w = np.random.rand(nzbins, self.npix)
         self._setup_mock_pairs()
 
-        with (
-            patch.object(
-                self.corr,
-                "_compute_tomo_sumofweights",
-                wraps=self.corr._compute_tomo_sumofweights,
-            ) as spy_compute,
-            patch.object(
-                self.corr,
-                "_fingerprint_weights",
-                wraps=self.corr._fingerprint_weights,
-            ) as spy_fp,
-        ):
+        with patch.object(
+            self.corr,
+            "_fingerprint_weights",
+            wraps=self.corr._fingerprint_weights,
+        ) as spy_fp:
             fields_of(self.corr.gg(shear_maps, w, apertures=False), "xi_p", "xi_m")
             fields_of(self.corr.gg(shear_maps, w, apertures=False), "xi_p", "xi_m")
-            self.assertEqual(spy_compute.call_count, 0)
             self.assertEqual(spy_fp.call_count, 0)
 
     def test_gg_gpu_branch_skips_sumofweights_machinery(self):
@@ -3553,13 +3304,6 @@ class TestCorrelationCoverage(unittest.TestCase):
                 ) as spy_vectorized,
                 patch.object(
                     self.corr,
-                    "_compute_tomo_sumofweights",
-                    side_effect=AssertionError(
-                        "sum-of-weights reduction should be skipped"
-                    ),
-                ),
-                patch.object(
-                    self.corr,
                     "_fingerprint_weights",
                     side_effect=AssertionError("fingerprinting should be skipped"),
                 ),
@@ -3568,97 +3312,11 @@ class TestCorrelationCoverage(unittest.TestCase):
                 fields_of(
                     self.corr.gg(shear_maps, w_changed, apertures=False), "xi_p", "xi_m"
                 )
-                # sumofweights_dev is passed to the kernel path as None so
-                # the in-kernel denominators are used.
-                for call in spy_vectorized.call_args_list:
-                    self.assertIsNone(call.args[2])
+                self.assertEqual(spy_vectorized.call_count, 2)
         finally:
             self.corr.backend.name = "numpy"
             self.corr.backend.to_device = orig_to_device
             self.corr.backend.to_numpy = orig_to_numpy
-
-    def test_gg_gpu_branch_explicit_sumofweights_forwarded(self):
-        """An explicit sumofweights still bypasses the in-kernel denominators."""
-        nzbins = 2
-        nzbin_combs = 3
-        shear_maps = np.random.rand(nzbins, 2, self.npix)
-        w = np.random.rand(nzbins, self.npix)
-        explicit_sum = np.ones(
-            (2, nzbin_combs, self.corr.n_patches * self.corr.nbins), dtype=np.float64
-        )
-        self._setup_mock_pairs()
-
-        stub = (
-            np.zeros((nzbin_combs, self.corr.n_patches, self.corr.nbins)),
-            np.zeros((nzbin_combs, self.corr.n_patches, self.corr.nbins)),
-        )
-        self.corr.backend.name = "cupy"
-        orig_to_device = self.corr.backend.to_device
-        orig_to_numpy = self.corr.backend.to_numpy
-        self.corr.backend.to_device = lambda arr, stream=None: np.asarray(arr)
-        self.corr.backend.to_numpy = lambda arr, stream=None: np.asarray(arr)
-        try:
-            with patch.object(
-                self.corr,
-                "_xipm_tomo_vectorized",
-                return_value=stub,
-            ) as spy_vectorized:
-                fields_of(
-                    self.corr.gg(
-                        shear_maps, w, sumofweights=explicit_sum, apertures=False
-                    ),
-                    "xi_p",
-                    "xi_m",
-                )
-                passed = spy_vectorized.call_args.args[2]
-                np.testing.assert_allclose(np.asarray(passed), explicit_sum)
-        finally:
-            self.corr.backend.name = "numpy"
-            self.corr.backend.to_device = orig_to_device
-            self.corr.backend.to_numpy = orig_to_numpy
-
-    def test_gg_explicit_sumofweights_still_accepted(self):
-        nzbins = 2
-        nzbin_combs = int(binom(nzbins + 1, 2))
-        shear_maps = np.random.rand(nzbins, 2, self.npix)
-        w = np.random.rand(nzbins, self.npix)
-        sumofweights = np.ones((2, nzbin_combs))
-        self._setup_mock_pairs()
-
-        xip, xim = fields_of(
-            self.corr.gg(shear_maps, w, sumofweights=sumofweights, apertures=False),
-            "xi_p",
-            "xi_m",
-        )
-        self.assertEqual(xip.shape, (nzbin_combs, self.corr.n_patches, self.corr.nbins))
-        self.assertEqual(xim.shape, (nzbin_combs, self.corr.n_patches, self.corr.nbins))
-
-    def test_gg_explicit_sumofweights_skips_fingerprint_checks(self):
-        nzbins = 2
-        nzbin_combs = int(binom(nzbins + 1, 2))
-        shear_maps = np.random.rand(nzbins, 2, self.npix)
-        w = np.random.rand(nzbins, self.npix)
-        explicit_sum = np.ones((2, nzbin_combs), dtype=np.float64)
-        self._setup_mock_pairs()
-
-        cache_sentinel = np.array([123.0], dtype=np.float64)
-        self.corr.compute_context._tomo_sumofweights_cache = cache_sentinel
-        self.corr.compute_context._tomo_sumofweights_cache_w_fingerprint = ("sentinel",)
-        self.corr.compute_context._tomo_sumofweights_cache_prepare_version = -1
-
-        with patch.object(
-            self.corr,
-            "_fingerprint_weights",
-            side_effect=AssertionError("fingerprint should be skipped"),
-        ):
-            xip, xim = fields_of(
-                self.corr.gg(shear_maps, w, sumofweights=explicit_sum, apertures=False),
-                "xi_p",
-                "xi_m",
-            )
-
-        self.assertEqual(xip.shape, (nzbin_combs, self.corr.n_patches, self.corr.nbins))
-        self.assertEqual(xim.shape, (nzbin_combs, self.corr.n_patches, self.corr.nbins))
 
     def test_gg_prepares(self):
         """Test that gg calls prepare if needed."""
@@ -3676,52 +3334,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         with patch.object(self.corr, "prepare", wraps=self.corr.prepare) as spy_prepare:
             fields_of(self.corr.gg(shear_maps, w, apertures=False), "xi_p", "xi_m")
             spy_prepare.assert_called_once()
-
-    def test_i3pcf_wrapper_methods_match_helpers(self):
-        corr = self._make_small_cpu_corr()
-        rng = np.random.default_rng(123)
-
-        nmaps, nzbins, npatches, nbins = 2, 2, 4, 3
-        npairs = nzbins * (nzbins + 1) // 2
-        M_g = rng.normal(size=(nmaps, nzbins, npatches))
-        M_a = rng.normal(size=(nmaps, nzbins, npatches))
-        xi_p = rng.normal(size=(nmaps, npairs, npatches, nbins))
-        xi_m = rng.normal(size=(nmaps, npairs, npatches, nbins))
-        xi_g = rng.normal(size=(nmaps, npairs, npatches, nbins))
-        xi_t = rng.normal(size=(nmaps, npairs, npatches, nbins))
-
-        np.testing.assert_allclose(
-            corr.zeta_g_plus(M_g, xi_p),
-            helper_zeta_g_plus(M_g, xi_p),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_g_minus(M_g, xi_m),
-            helper_zeta_g_minus(M_g, xi_m),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_a_plus(M_a, xi_p),
-            helper_zeta_a_plus(M_a, xi_p),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_a_minus(M_a, xi_m),
-            helper_zeta_a_minus(M_a, xi_m),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_g_g(M_g, xi_g),
-            helper_zeta_g_g(M_g, xi_g),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_a_g(M_a, xi_g),
-            helper_zeta_a_g(M_a, xi_g),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_g_t(M_g, xi_t),
-            helper_zeta_g_t(M_g, xi_t),
-        )
-        np.testing.assert_allclose(
-            corr.zeta_a_t(M_a, xi_t),
-            helper_zeta_a_t(M_a, xi_t),
-        )
 
     def test_sumofweights_helper_shapes(self):
         nside = 32
@@ -3745,10 +3357,6 @@ class TestCorrelationCoverage(unittest.TestCase):
         w2_dev = corr.backend.to_device(w2)
         sum_w = corr._compute_xipm_sumofweights(w1_dev, w2_dev)
         self.assertEqual(sum_w.shape[0], corr.n_patches * corr.nbins)
-
-        w_dev = corr.backend.to_device(np.ones((1, npix), dtype=np.float64))
-        sum_w_tomo = corr._compute_tomo_sumofweights(w_dev, 1, 1)
-        self.assertEqual(sum_w_tomo.shape, (2, 1, corr.n_patches * corr.nbins))
 
     def test_precision_applied_to_internal_arrays_regression(self):
         nside = 32
@@ -3791,38 +3399,3 @@ class TestCorrelationCoverage(unittest.TestCase):
         self.assertEqual(M_ap.dtype, np.float32)
         self.assertEqual(xip.dtype, np.float32)
         self.assertEqual(xim.dtype, np.float32)
-
-    def test_calculate_all_zetas_api_uses_explicit_center_annulus_names(self):
-        corr = self._make_small_cpu_corr()
-        rng = np.random.default_rng(456)
-
-        nmaps, nzbins, npatches, nbins = 2, 2, 4, 3
-        npairs = nzbins * (nzbins + 1) // 2
-        M_g = rng.normal(size=(nmaps, nzbins, npatches))
-        M_a = rng.normal(size=(nmaps, nzbins, npatches))
-        xi_p = rng.normal(size=(nmaps, npairs, npatches, nbins))
-        xi_m = rng.normal(size=(nmaps, npairs, npatches, nbins))
-        xi_g = rng.normal(size=(nmaps, npairs, npatches, nbins))
-        xi_t = rng.normal(size=(nmaps, npairs, npatches, nbins))
-
-        all_zetas = corr.calculate_all_zetas(
-            M_g=M_g,
-            M_a=M_a,
-            xi_p=xi_p,
-            xi_m=xi_m,
-            xi_g=xi_g,
-            xi_t=xi_t,
-        )
-        self.assertEqual(
-            set(all_zetas.keys()),
-            {
-                "zeta_g_plus",
-                "zeta_g_minus",
-                "zeta_a_plus",
-                "zeta_a_minus",
-                "zeta_g_g",
-                "zeta_a_g",
-                "zeta_g_t",
-                "zeta_a_t",
-            },
-        )

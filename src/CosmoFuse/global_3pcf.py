@@ -30,8 +30,8 @@ bins is the ratio of the angle-binned sums,
     c_n^k = (1/2pi) int_{bin k} exp(-i n phi) dphi,
 
 which converges to the brute-force binned estimator as ``n_max`` grows
-(:meth:`~CosmoFuse.results.ThreePointResult.binned`).  ``to_centroid`` converts to the
-centroid projection (flat-sky triangle geometry at the bin centres).
+(:meth:`~CosmoFuse.results.ThreePointResult.binned`).  Spin-2 values are reported
+in the x-projection; a theory prediction is converted to it per triangle.
 
 Algorithm
 ---------

@@ -10,6 +10,7 @@ import numpy as np
 from scipy.special import binom
 
 from CosmoFuse.correlations import Integrated3PCF
+from CosmoFuse.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -251,7 +252,8 @@ class TestCorrelationCalculations(unittest.TestCase):
         Q_patch_center_RA = 0.0
         Q_patch_center_dec = 0.0
 
-        cos_2phi, sin_2phi, Q = self.corr.get_pairs_patch_M_a(
+        cos_2phi, sin_2phi, Q = PairGeometry.get_pairs_patch_M_a(
+            self.corr,
             pixels_RA_Q_patch,
             pixels_dec_Q_patch,
             Q_patch_center_RA,
@@ -269,7 +271,8 @@ class TestCorrelationCalculations(unittest.TestCase):
         def custom_filter(theta, _theta_Q):
             return np.full_like(theta, 2.5)
 
-        _cos_2phi, _sin_2phi, Q = self.corr.get_pairs_patch_M_a(
+        _cos_2phi, _sin_2phi, Q = PairGeometry.get_pairs_patch_M_a(
+            self.corr,
             pixels_RA_Q_patch,
             pixels_dec_Q_patch,
             0.0,
@@ -452,8 +455,8 @@ class TestCorrelationCalculations(unittest.TestCase):
         self.corr.theta_center = np.array([np.pi / 4, np.pi / 3])
         self.corr.phi_center = np.array([0.0, 0.5])
         with patch.object(
-            self.corr,
-            "__get_pairs_helper__",
+            PairGeometry,
+            "get_pairs_helper",
             side_effect=[
                 (np.array([[1], [2]]), np.array([1 + 1j]), np.array([1])),
                 (np.array([[3], [4]]), np.array([1 - 1j]), np.array([1])),

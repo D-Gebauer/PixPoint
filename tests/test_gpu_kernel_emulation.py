@@ -492,38 +492,6 @@ class TestEmulatedGpuParityFloat64Rotations(unittest.TestCase):
         self._allclose(ap_shear, self.ref_ap_shear)
         self._allclose(ap_density, self.ref_ap_density)
 
-    def test_explicit_sumofweights_still_respected(self):
-        """An explicit sumofweights bypasses the in-kernel denominators."""
-        m = self.maps
-        nzbin_combs = 3
-        nbins_total = self.corr.n_patches * self.corr.nbins
-        explicit = np.full((2, nzbin_combs, nbins_total), 2.0)
-        ref_xip, ref_xim = fields_of(
-            self.corr.gg(
-                m["shear"],
-                m["w_shear"],
-                sumofweights=explicit,
-                return_device=False,
-                apertures=False,
-            ),
-            "xi_p",
-            "xi_m",
-        )
-        with emulated_gpu(self.corr):
-            xip, xim = fields_of(
-                self.corr.gg(
-                    m["shear"],
-                    m["w_shear"],
-                    sumofweights=explicit,
-                    return_device=False,
-                    apertures=False,
-                ),
-                "xi_p",
-                "xi_m",
-            )
-        self._allclose(xip, ref_xip)
-        self._allclose(xim, ref_xim)
-
 
 class TestEmulatedGpuParityFloat32Rotations(unittest.TestCase):
     """rotation float32: the standalone xi+/- kernel rotates in complex64

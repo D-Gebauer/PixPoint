@@ -1,8 +1,9 @@
 """Multi-device gates of the footprint-wide estimators.
 
-M1  Global2PCF on 2 and 3 "devices" == one device, bitwise per tile, for
-    gg/kk/kg/three_by_two_pt, at full resolution, with the static treecode and
-    with packed pairs; the tile ranges cover the tiles in order.
+M1  Global2PCF on 2 and 3 "devices" == one device to the order of the final
+    add (<= 1e-13 of the largest sum), for gg/kk/kg/three_by_two_pt, at full
+    resolution, with the static treecode and with packed pairs; the tile
+    ranges cover the tiles in order.
 M2  Global3PCF on 2 and 3 "devices" == one device to summation order
     (<= 1e-13), every component, numerators and normalisations.
 M3  pair files: written by a group, read by a group or one device, bitwise.
@@ -76,8 +77,8 @@ class TestGlobal2PCF(unittest.TestCase):
         np.testing.assert_array_equal(a.binedges, b.binedges)
         self.assertEqual(a.names, b.names)
         for name in a.names:
-            np.testing.assert_array_equal(a.tile_num[name], b.tile_num[name])
-        np.testing.assert_array_equal(a.tile_weight, b.tile_weight)
+            g2._assert_close_sums(a.num[name], b.num[name])
+        g2._assert_close_sums(a.weight, b.weight)
 
     def _check(self, **extra):
         single = _global2(self.mask, "cpu", tile_nside=8, **extra)
@@ -94,7 +95,7 @@ class TestGlobal2PCF(unittest.TestCase):
                     self.assertEqual(a, b)
                 got = _all_2pcf(multi, self.shear, self.w, self.dens)
                 for key in ref:
-                    self.assertIsInstance(got[key].tile_weight, np.ndarray)
+                    self.assertIsInstance(got[key].weight, np.ndarray)
                     self.assertSameResult(got[key], ref[key])
 
     def test_full_resolution(self):
@@ -182,9 +183,8 @@ class TestPairFiles(unittest.TestCase):
                     other.load_pairs(path)
                     got = other.gg(shear, w, return_device=False)
                     for name in ref.names:
-                        np.testing.assert_array_equal(
-                            got.tile_num[name], ref.tile_num[name]
-                        )
+                        g2._assert_close_sums(got.num[name], ref.num[name])
+                    g2._assert_close_sums(got.weight, ref.weight)
 
     def test_global3pcf(self):
         mask, g, w, _d = g3._setup()

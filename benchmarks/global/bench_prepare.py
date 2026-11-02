@@ -128,7 +128,7 @@ def main():
         res = res.to_numpy()
         rep[f"{tag}_state"] = _state(g)
         rep[f"{tag}_gg"] = _digest(
-            [res.tile_num["xi_p"], res.tile_num["xi_m"], res.tile_weight]
+            [res.num["xi_p"], res.num["xi_m"], res.weight]
         )
         rep[f"{tag}_gg_ms"] = 1e3 * float(np.median(times))
 

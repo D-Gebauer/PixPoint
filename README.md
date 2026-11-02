@@ -70,7 +70,7 @@ where $\delta_l$ is the lens overdensity and $g_{s,t}$ is the source tangential 
 - Calculate pairs for given mask & resolution once
 - Save/Load pairs using hdf5 files
 - Reuse pairs to measure i3PCFs across maps
-- Footprint-wide 2PCFs (ξ±, w(θ), γ_t) with per-tile sums for jackknife errors
+- Footprint-wide 2PCFs (ξ±, w(θ), γ_t) as ratios of sums over every pixel pair
 - Footprint-wide 3PCFs (shear Γ₀…Γ₃, scalar ζ, any mixed spin-0/spin-2 triplet) by multipole decomposition
 - Tomographic measurements of all probes on CPU and GPU
 - Automatic patch-center selection from a survey mask (optionally weighted by the compensated filter)
@@ -423,12 +423,12 @@ w_theta = g2.kk(delta_maps, w_cov).xi                 # KK field estimator (= LS
 gamma_t = g2.kg(delta_maps, shear_maps, w_lens, w_source).xi
 out = g2.three_by_two_pt(shear_maps, delta_maps, w_source, w_lens)   # {"gg", "kk", "kg"}
 
-jk = gg.jackknife()["xi_p"]                           # delete-one-tile estimates (n_tiles, ncomb, nbins)
+gg.num["xi_p"], gg.weight                             # the sums themselves, (ncomb, nbins)
 ```
 
-A `TwoPointResult` holds the per-tile sums; the estimate is their ratio over the whole footprint,
-`jackknife()` gives the delete-one-tile estimates, and results of different tile sets or devices
-add with `+`. The estimator is the ratio of sums over every pixel pair of the footprint and agrees
+A `TwoPointResult` holds the sums Σ w_i w_j f_i f_j and Σ w_i w_j over the whole footprint; the
+estimate is their ratio, and results of different footprints or devices add with `+`. The
+estimator is the ratio of sums over every pixel pair of the footprint and agrees
 with TreeCorr's `GGCorrelation`, `KKCorrelation` (`k = δ`) and `KGCorrelation` on the pixel
 centres (`brute=True`, `metric="Arc"`) to TreeCorr's rounding.
 
@@ -456,7 +456,6 @@ g3.preprocess()
 res = g3.ggg(shear_maps, w, flip_g1=True)            # ThreePointResult, labels gamma0..gamma3
 res.num["gamma0"].shape    # (2 n_max + 1, nz, nz, nz, nbins, nbins): n, z_centre, z_leg2, z_leg3, b2, b3
 gamma = res.binned(np.linspace(-np.pi, np.pi, 17))    # label -> (..., nbins, nbins, 16)
-gamma_cen = res.to_centroid(gamma, np.linspace(-np.pi, np.pi, 17))
 
 zeta = g3.kkk(delta_maps, w)                          # scalar 3PCF
 kgg = g3.kgg(delta_maps, shear_maps, w_lens, w_source)  # <k g g>, <k g* g>
@@ -469,9 +468,10 @@ mixed = g3.measure(                                   # any spin-0 / spin-2 comb
 
 A triangle is seen from its centre vertex with legs in radial bins `b2`, `b3` and opening angle
 `phi = phi_3 - phi_2`. The multipoles are exact for every `n`; only the conversion to
-opening-angle bins (`binned()`) truncates at `n_max`. Spin-2 values are in the x-projection
-(`Re` = tangential); `to_centroid` converts binned values to the centroid projection. Results
-are sums, so tiles, chunks and devices add with `+`. Full resolution only.
+opening-angle bins (`binned()`) truncates at `n_max`. Spin-2 values are in the x-projection:
+every vertex is projected along its leg to the centre (f̃ = −f e^{−2iβ}, `Re` = tangential),
+so a theory prediction is converted to that projection per triangle. Results are sums, so
+chunks and devices add with `+`. Full resolution only.
 
 ## Calculating i3PCFs
 

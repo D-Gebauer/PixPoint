@@ -16,8 +16,7 @@ are found **per tile**:
 * ownership: an **unordered** pair ``{a, b}`` belongs to the tile of its
   lower global id (``a < b``), an **ordered** pair ``(i -> j)`` to the tile of
   its centre ``i``.  Either rule assigns every pair to exactly one tile, so
-  tile sums add up to the footprint sum and a tile is also a natural
-  jackknife region.
+  the tile sums add up to the footprint sum.
 
 Tiles are HEALPix-aligned, so as long as ``tile_nside`` does not exceed the
 coarsest treecode level every coarse cell lies inside one tile, and the

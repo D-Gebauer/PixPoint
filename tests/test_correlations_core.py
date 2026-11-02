@@ -9,6 +9,7 @@ from scipy.special import binom
 
 import CosmoFuse.correlations as correlations_module
 from CosmoFuse.correlations import Integrated3PCF
+from CosmoFuse.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -185,7 +186,7 @@ class TestCorrelation(unittest.TestCase):
         ra = np.array([0.0, 0.1, 0.2, 0.3])
         dec = np.array([0.0, 0.1, 0.2, 0.3])
 
-        all_inds, exp2phi = corr.get_pairs_patch(patch_inds, ra, dec)
+        all_inds, exp2phi = PairGeometry.get_pairs_patch(corr, patch_inds, ra, dec)
 
         self.assertIsInstance(all_inds, list)
         self.assertIsInstance(exp2phi, np.ndarray)
@@ -203,7 +204,7 @@ class TestCorrelation(unittest.TestCase):
         ra = np.array([0.0])
         dec = np.array([0.0])
 
-        all_inds, exp2phi = corr.get_pairs_patch(patch_inds, ra, dec)
+        all_inds, exp2phi = PairGeometry.get_pairs_patch(corr, patch_inds, ra, dec)
 
         self.assertEqual(len(all_inds), corr.nbins)
         for inds in all_inds:
@@ -241,7 +242,7 @@ class TestCorrelation(unittest.TestCase):
         with patch.object(
             corr, "_compute_pairs_kernel", return_value=empty_out
         ) as kernel_mock:
-            corr.get_pairs_patch(patch_inds, ra, dec)
+            PairGeometry.get_pairs_patch(corr, patch_inds, ra, dec)
 
         kernel_mock.assert_called_once()
         spy_getter.assert_called_with(False)
@@ -498,7 +499,7 @@ class TestCorrelation(unittest.TestCase):
             theta_center=self.theta_center,
             nbins=self.nbins,
         )
-        corr.inds_dev = np.array([0], dtype=np.int64)
+        corr.compute_context.inds_dev = np.array([0], dtype=np.int64)
 
         class FakeGPUArray:
             def __init__(self, values, *, device_id=0):
@@ -552,9 +553,6 @@ class TestCorrelation(unittest.TestCase):
             np.ones((nzbins, 2, npix), dtype=np.float64), device_id=0
         )
         weights = FakeGPUArray(np.ones((nzbins, npix), dtype=np.float64), device_id=0)
-        sumofweights = FakeGPUArray(
-            np.ones((2, nzbin_combs), dtype=np.float64), device_id=0
-        )
         xip_dev = FakeGPUArray(
             np.ones((nzbin_combs, corr.n_patches, corr.nbins), dtype=np.float64),
             device_id=0,
@@ -568,9 +566,7 @@ class TestCorrelation(unittest.TestCase):
             corr, "_xipm_tomo_vectorized", return_value=(xip_dev, xim_dev)
         ):
             xip, xim = fields_of(
-                corr.gg(
-                    shear_maps, weights, sumofweights=sumofweights, apertures=False
-                ),
+                corr.gg(shear_maps, weights, apertures=False),
                 "xi_p",
                 "xi_m",
             )

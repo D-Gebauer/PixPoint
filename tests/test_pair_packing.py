@@ -325,8 +325,8 @@ class TestPackedMeasurement(unittest.TestCase):
             ),
         )
         with emulated_gpu(corr):
-            corr.inds_dev = None
-            corr.exp2phi_dev = None
+            corr.compute_context.inds_dev = None
+            corr.compute_context.exp2phi_dev = None
             corr.compute_context.inds_i_dev = corr.compute_context.inds_j_dev = None
             corr.compute_context.Q_inds_dev = None
             got = dict(

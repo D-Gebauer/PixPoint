@@ -11,15 +11,6 @@ from scipy.special import binom
 from ._numba import njit, prange
 from .backend import get_backend, safe_divide
 from .compute_context import ComputeContext
-from .correlation_helpers import calculate_all_zetas as _calculate_all_zetas_helper
-from .correlation_helpers import zeta_a_g as _zeta_a_g_helper
-from .correlation_helpers import zeta_a_minus as _zeta_a_minus_helper
-from .correlation_helpers import zeta_a_plus as _zeta_a_plus_helper
-from .correlation_helpers import zeta_a_t as _zeta_a_t_helper
-from .correlation_helpers import zeta_g_g as _zeta_g_g_helper
-from .correlation_helpers import zeta_g_minus as _zeta_g_minus_helper
-from .correlation_helpers import zeta_g_plus as _zeta_g_plus_helper
-from .correlation_helpers import zeta_g_t as _zeta_g_t_helper
 from .io_handler import PairIOHandler
 from .packing import (
     block_edges,
@@ -73,34 +64,6 @@ _ROTATION_COMPLEX_PRECISION = {
 # A buffer as the degrade kernels address it:
 # (array, base, lead_stride, comp_stride, row_stride), in elements.
 _Desc = Tuple[Any, int, int, int, int]
-
-
-def _compute_aperture_shear_all_patches(
-    Q_inds: np.ndarray,
-    Q_cos: np.ndarray,
-    Q_sin: np.ndarray,
-    Q_val: np.ndarray,
-    Q_offsets: np.ndarray,
-    g1: np.ndarray,
-    g2: np.ndarray,
-    Q_w: np.ndarray,
-    Q_patch_area: np.ndarray,
-) -> np.ndarray:
-    n_patches = Q_offsets.size - 1
-    m_a = np.zeros(n_patches, dtype=g1.dtype)
-    for patch_idx in range(n_patches):
-        start = Q_offsets[patch_idx]
-        end = Q_offsets[patch_idx + 1]
-        sum_w = g1[0] * 0.0
-        sum_gtw = g1[0] * 0.0
-        for i in range(start, end):
-            idx = Q_inds[i]
-            gt = -g1[idx] * Q_cos[i] - g2[idx] * Q_sin[i]
-            weight = Q_w[idx]
-            sum_w += weight
-            sum_gtw += weight * gt * Q_val[i]
-        m_a[patch_idx] = Q_patch_area[patch_idx] * sum_gtw / sum_w
-    return m_a
 
 
 def _compute_pairs_impl(
@@ -533,9 +496,6 @@ class Integrated3PCF:
         self.theta_center = theta_center
         self.n_patches = len(phi_center)
         self.fastmath = fastmath
-        self.aperture_shear_all_patches = njit(fastmath=fastmath, cache=True)(
-            _compute_aperture_shear_all_patches
-        )
         self._compute_pairs_kernel = _get_pairs_numba_kernel(fastmath)
         # Truncation radius of the aperture geometry, in arcminutes.  Q
         # has decayed below 1e-3 of its peak by 5 theta_Q (Q_crittenden has
@@ -758,9 +718,6 @@ class Integrated3PCF:
         self.map_mask = np.zeros(hp.nside2npix(self.nside), dtype=bool)
         self.map_mask[self.map_inds] = True
         self.backend = get_backend(self.device)
-        self.aperture_shear_all_patches = njit(fastmath=self.fastmath, cache=True)(
-            _compute_aperture_shear_all_patches
-        )
         self._compute_pairs_kernel = _get_pairs_numba_kernel(self.fastmath)
         self._pair_finder = self._make_pair_finder()
         self.compute_context = ComputeContext()
@@ -797,58 +754,31 @@ class Integrated3PCF:
         binedges = np.asarray(self.binedges, dtype=search_dtype)
         self._compute_pairs_kernel(pts, ra, dec, binedges)
 
+    # Device-side pair geometry, read-only views of the ComputeContext (written
+    # by prepare(); tests that fake a prepared state write to the context).
     @property
     def inds_dev(self) -> Any:
         return self.compute_context.inds_dev
-
-    @inds_dev.setter
-    def inds_dev(self, value: Any) -> None:
-        # ctx.inds_i_dev / inds_j_dev are the contiguous, kernel-dtype copies
-        # of exactly this array (see _pair_index_arrays).  Leaving them in
-        # place would have the next measurement read the previous geometry.
-        self.compute_context.inds_dev = value
-        self.compute_context.inds_i_dev = None
-        self.compute_context.inds_j_dev = None
 
     @property
     def exp2phi_dev(self) -> Any:
         return self.compute_context.exp2phi_dev
 
-    @exp2phi_dev.setter
-    def exp2phi_dev(self, value: Any) -> None:
-        self.compute_context.exp2phi_dev = value
-
     @property
     def bins_dev(self) -> Any:
         return self.compute_context.bins_dev
-
-    @bins_dev.setter
-    def bins_dev(self, value: Any) -> None:
-        self.compute_context.bins_dev = value
 
     @property
     def tot_bins_dev(self) -> Any:
         return self.compute_context.tot_bins_dev
 
-    @tot_bins_dev.setter
-    def tot_bins_dev(self, value: Any) -> None:
-        self.compute_context.tot_bins_dev = value
-
     @property
     def tot_bins_reduceat_dev(self) -> Any:
         return self.compute_context.tot_bins_reduceat_dev
 
-    @tot_bins_reduceat_dev.setter
-    def tot_bins_reduceat_dev(self, value: Any) -> None:
-        self.compute_context.tot_bins_reduceat_dev = value
-
     @property
     def ntotpairs(self) -> int:
         return self.compute_context.ntotpairs
-
-    @ntotpairs.setter
-    def ntotpairs(self, value: int) -> None:
-        self.compute_context.ntotpairs = value
 
     @property
     def Q_inds_flat(self) -> Any:
@@ -1058,11 +988,6 @@ class Integrated3PCF:
         self.compute_context.tomo_combination_cache[cache_key] = cached_tuple
         return cached_tuple
 
-    def aperture_filter_key(self, aperture_filter: Callable[..., Any]) -> Any:
-        """Key identifying the filter an aperture geometry was built with
-        (stable for as long as the filter object is alive)."""
-        return PairGeometry.aperture_filter_key(aperture_filter)
-
     def _evaluate_aperture_filter(
         self,
         aperture_filter: Callable[..., Any],
@@ -1204,55 +1129,8 @@ class Integrated3PCF:
         comb_j_dev = module.ascontiguousarray(module.asarray(comb_j_np))
         return comb_i_dev, comb_j_dev, ncomb
 
-    def get_pairs_patch(
-        self,
-        patch_inds: np.ndarray,
-        ra: np.ndarray,
-        dec: np.ndarray,
-    ) -> Tuple[List[np.ndarray], np.ndarray]:
-        return PairGeometry.get_pairs_patch(
-            self,
-            patch_inds,
-            ra,
-            dec,
-        )
-
-    def __get_pairs_helper__(
-        self,
-        i: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return PairGeometry.get_pairs_helper(self, i)
-
     def find_pairs(self) -> None:
         PairGeometry.find_pairs(self)
-
-    def get_pairs_patch_M_a(
-        self,
-        pixels_RA_Q_patch: np.ndarray,
-        pixels_dec_Q_patch: np.ndarray,
-        Q_patch_center_RA: float,
-        Q_patch_center_dec: float,
-        aperture_filter: Optional[Callable[..., Any]] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return PairGeometry.get_pairs_patch_M_a(
-            self,
-            pixels_RA_Q_patch,
-            pixels_dec_Q_patch,
-            Q_patch_center_RA,
-            Q_patch_center_dec,
-            aperture_filter=aperture_filter,
-        )
-
-    def __get_pairs_M_a_helper__(
-        self,
-        i: int,
-        aperture_filter: Optional[Callable[..., Any]] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
-        return PairGeometry.get_pairs_M_a_helper(
-            self,
-            i,
-            aperture_filter=aperture_filter,
-        )
 
     def find_aperture_pairs(
         self,
@@ -1799,18 +1677,20 @@ class Integrated3PCF:
         # this method clears the flag.
         self._prepare_failed = True
         if keep_unpacked:
-            self.inds_dev = self.backend.to_device(temp_inds)
+            ctx.inds_dev = self.backend.to_device(temp_inds)
             _index_device_dtype = getattr(module, self.index_dtype.name)
+            # ctx.inds_i_dev / inds_j_dev are the contiguous, kernel-dtype
+            # copies of exactly this array (see _pair_index_arrays).
             ctx.inds_i_dev = module.ascontiguousarray(
-                self.inds_dev[0].astype(_index_device_dtype, copy=False)
+                ctx.inds_dev[0].astype(_index_device_dtype, copy=False)
             )
             ctx.inds_j_dev = module.ascontiguousarray(
-                self.inds_dev[1].astype(_index_device_dtype, copy=False)
+                ctx.inds_dev[1].astype(_index_device_dtype, copy=False)
             )
-            self.exp2phi_dev = self.backend.to_device(temp_exp2phi)
+            ctx.exp2phi_dev = self.backend.to_device(temp_exp2phi)
         else:
-            self.inds_dev = None
-            self.exp2phi_dev = None
+            ctx.inds_dev = None
+            ctx.exp2phi_dev = None
             ctx.inds_i_dev = None
             ctx.inds_j_dev = None
         if pack:
@@ -1826,16 +1706,16 @@ class Integrated3PCF:
             ctx.packed_pairs_dev = None
             ctx.packed_row_base_dev = None
             ctx.packed_perm_dev = None
-        self.bins_dev = self.backend.to_device(temp_bins)
+        ctx.bins_dev = self.backend.to_device(temp_bins)
         if size <= np.iinfo(self.index_dtype).max:
-            self.tot_bins_dev = self.backend.to_device(
+            ctx.tot_bins_dev = self.backend.to_device(
                 temp_bins_tot.astype(self.index_dtype)
             )
         else:
-            self.tot_bins_dev = self.backend.to_device(temp_bins_tot)
-        self.tot_bins_reduceat_dev = self.backend.to_device(temp_bins_tot)
+            ctx.tot_bins_dev = self.backend.to_device(temp_bins_tot)
+        ctx.tot_bins_reduceat_dev = self.backend.to_device(temp_bins_tot)
         self._prepare_aperture_device_buffers()
-        self.ntotpairs = size
+        ctx.ntotpairs = size
         self.compute_context.prepare_version += 1
         # Published last, so that everything above having succeeded is what
         # clears the flag.  A failure part-way through (an OOM during the
@@ -2435,135 +2315,6 @@ class Integrated3PCF:
     def _normalize_scalar_pairs(self, num: Any, sumofweights_dev: Any) -> Any:
         val = self._normalize_by_weights(num, sumofweights_dev)
         return val.reshape((self.n_patches, self.nbins))
-
-    def _normalize_tomo_sumofweights_per_comb(
-        self, sumofweights: Any, nzbin_combs: int
-    ) -> Any:
-        nbins_total = self.n_patches * self.nbins
-        if self._is_backend_native_array(sumofweights):
-            # Device arrays whose shape already matches an accepted layout
-            # are reshaped on device — no GPU→host round-trip.
-            backend_dtype = getattr(self.backend.module, self.map_dtype.name)
-            s: Any = sumofweights
-            if s.ndim == 2 and s.shape == (nzbin_combs, nbins_total):
-                return s.astype(backend_dtype, copy=False)
-            if s.ndim == 3 and s.shape == (nzbin_combs, self.n_patches, self.nbins):
-                return s.reshape(nzbin_combs, nbins_total).astype(
-                    backend_dtype, copy=False
-                )
-            if (
-                s.ndim == 2
-                and nzbin_combs == 1
-                and s.shape == (self.n_patches, self.nbins)
-            ):
-                return s.reshape(1, nbins_total).astype(backend_dtype, copy=False)
-            if s.ndim == 1 and s.size == nzbin_combs * nbins_total:
-                return s.reshape(nzbin_combs, nbins_total).astype(
-                    backend_dtype, copy=False
-                )
-            if s.ndim == 1 and nzbin_combs == 1 and s.size == nbins_total:
-                return s.reshape(1, nbins_total).astype(backend_dtype, copy=False)
-            # scalar / per-combination broadcasts fall through to the host path
-        sum_np = np.asarray(self.backend.to_numpy(sumofweights), dtype=self.map_dtype)
-
-        if sum_np.ndim == 0:
-            expanded = np.full(
-                (nzbin_combs, nbins_total), sum_np.item(), dtype=self.map_dtype
-            )
-            return self.backend.to_device(expanded)
-
-        if sum_np.ndim == 1:
-            if sum_np.size == nzbin_combs:
-                expanded = np.repeat(
-                    sum_np.reshape(nzbin_combs, 1), nbins_total, axis=1
-                )
-                return self.backend.to_device(expanded)
-            if nzbin_combs == 1 and sum_np.size == nbins_total:
-                return self.backend.to_device(sum_np.reshape(1, nbins_total))
-            if sum_np.size == nzbin_combs * nbins_total:
-                return self.backend.to_device(sum_np.reshape(nzbin_combs, nbins_total))
-
-        if sum_np.ndim == 2:
-            if sum_np.shape == (nzbin_combs, nbins_total):
-                return self.backend.to_device(sum_np)
-            if nzbin_combs == 1 and sum_np.shape == (self.n_patches, self.nbins):
-                return self.backend.to_device(sum_np.reshape(1, nbins_total))
-
-        if sum_np.ndim == 3 and sum_np.shape == (
-            nzbin_combs,
-            self.n_patches,
-            self.nbins,
-        ):
-            return self.backend.to_device(sum_np.reshape(nzbin_combs, nbins_total))
-
-        raise ValueError(
-            "sumofweights must be scalar, (nzbin_combs,), "
-            f"({nzbin_combs}, {self.n_patches}, {self.nbins}), "
-            f"or ({nzbin_combs}, {nbins_total}) -- or the directional form, "
-            f"the same prefixed with a leading 2 for the (a->b, b->a) "
-            f"orientations; got {sum_np.shape}"
-        )
-
-    def _is_per_comb_sumofweights_shape(
-        self, shape: Tuple[int, ...], nzbin_combs: int
-    ) -> bool:
-        """Whether *shape* is one of the accepted per-combination layouts."""
-        nbins_total = self.n_patches * self.nbins
-        if len(shape) == 0:
-            return True
-        if len(shape) == 1:
-            size = int(shape[0])
-            return (
-                size == nzbin_combs
-                or (nzbin_combs == 1 and size == nbins_total)
-                or size == nzbin_combs * nbins_total
-            )
-        if len(shape) == 2:
-            return shape == (nzbin_combs, nbins_total) or (
-                nzbin_combs == 1 and shape == (self.n_patches, self.nbins)
-            )
-        if len(shape) == 3:
-            return shape == (nzbin_combs, self.n_patches, self.nbins)
-        return False
-
-    def _normalize_tomo_sumofweights_directional(
-        self, sumofweights: Any, nzbin_combs: int
-    ) -> Any:
-        """Accept either one sum per combination or one per orientation.
-
-        The directional form is the per-combination form with a leading 2.
-        Deciding that from ``shape[0] == 2`` alone makes the per-combination
-        form unusable whenever there happen to be exactly two tomographic
-        combinations -- a ``(2, nbins_total)`` array is then read as two
-        orientations of a one-combination measurement.  Deciding it from the
-        whole shape removes the collision: an array is directional only when
-        what follows the leading 2 is itself a valid per-combination layout.
-        """
-
-        def directional(array: Any) -> bool:
-            shape = tuple(getattr(array, "shape", ()))
-            return (
-                len(shape) >= 2
-                and shape[0] == 2
-                and self._is_per_comb_sumofweights_shape(shape[1:], nzbin_combs)
-            )
-
-        if self._is_backend_native_array(sumofweights) and directional(sumofweights):
-            sum_ab = self._normalize_tomo_sumofweights_per_comb(
-                sumofweights[0], nzbin_combs
-            )
-            sum_ba = self._normalize_tomo_sumofweights_per_comb(
-                sumofweights[1], nzbin_combs
-            )
-            return self.backend.module.stack((sum_ab, sum_ba), axis=0)
-        sum_np = np.asarray(self.backend.to_numpy(sumofweights), dtype=self.map_dtype)
-        if directional(sum_np):
-            sum_ab = self._normalize_tomo_sumofweights_per_comb(sum_np[0], nzbin_combs)
-            sum_ba = self._normalize_tomo_sumofweights_per_comb(sum_np[1], nzbin_combs)
-            return self.backend.module.stack((sum_ab, sum_ba), axis=0)
-
-        per_comb = self._normalize_tomo_sumofweights_per_comb(sum_np, nzbin_combs)
-        return self.backend.module.stack((per_comb, per_comb), axis=0)
 
     def _is_backend_native_array(self, array: Any) -> bool:
         if self.backend.name != "cupy":
@@ -3937,60 +3688,6 @@ class Integrated3PCF:
             cache.pop(next(iter(cache)))
         return sumofweights_dev
 
-    def compute_sumofweights(self, weights: Any, nzbins: Optional[int] = None) -> Any:
-        """Precompute the pair weight sums the ``sumofweights=`` argument takes.
-
-        Every tomographic method accepts ``sumofweights=`` so that a weight
-        set that does not change between realisations is reduced once
-        instead of once per map.  This is what builds a valid value: the
-        directional ``(2, ncomb, n_patches * nbins)`` array, orientation 0
-        being A→B and orientation 1 B→A (identical for auto combinations).
-
-        Needs the unpacked geometry, so ``pack_pairs=False`` on a GPU.
-
-        Args:
-            weights: ``(nzbins, n_active)`` or ``(nzbins, npix)`` weight maps.
-            nzbins: defaults to ``weights.shape[0]``.
-        """
-        if nzbins is None:
-            nzbins = int(weights.shape[0])
-        nzbin_combs = nzbins * (nzbins + 1) // 2
-        return self._compute_tomo_sumofweights(
-            self._map_to_device(weights), nzbins, nzbin_combs
-        )
-
-    def _compute_tomo_sumofweights(
-        self, w_dev: Any, nzbins: int, nzbin_combs: int
-    ) -> Any:
-        self._ensure_prepared()
-        self._require_unpacked_pairs("Precomputing sums of weights")
-
-        if int(w_dev.shape[-1]) == self.n_active:
-            _, w_dev = self._expand_rows((), w_dev, "pairs")
-
-        map_backend_dtype = getattr(self.backend.module, self.map_dtype.name)
-        sumofweights_dev = self.backend.zeros(
-            (2, nzbin_combs, self.n_patches * self.nbins),
-            dtype=map_backend_dtype,
-        )
-
-        k = 0
-        for i in range(nzbins):
-            for j in range(i, nzbins):
-                sum_ij = self._reduce_pairs(
-                    w_dev[i][self.inds_dev[0]] * w_dev[j][self.inds_dev[1]]
-                )
-                sumofweights_dev[0, k] = sum_ij
-                if i == j:
-                    sumofweights_dev[1, k] = sum_ij
-                else:
-                    sumofweights_dev[1, k] = self._reduce_pairs(
-                        w_dev[j][self.inds_dev[0]] * w_dev[i][self.inds_dev[1]]
-                    )
-                k += 1
-
-        return sumofweights_dev
-
     def _transpose_tomo_inputs_aos(
         self, shear_maps_dev: Any, w_dev: Any
     ) -> Tuple[Any, Any]:
@@ -4002,42 +3699,21 @@ class Integrated3PCF:
         weights_aos = module.ascontiguousarray(module.transpose(w_dev, (1, 0)))
         return shear_aos, weights_aos
 
-    def _symmetrised_denominators(
-        self, out_den: Any, sumofweights_dev: Any, auto_comb: np.ndarray
-    ) -> Any:
-        """Per-combination weight sums ``(ncomb, nbins_total)``.
-
-        From the kernel (both orientations of a cross combination already
-        summed) or from an explicit directional ``(2, ncomb, nbins_total)``
-        array, whose orientations are summed here for cross combinations
-        (auto combinations carry the same sum twice).
-        """
-        if sumofweights_dev is None:
-            return out_den
-        direct = sumofweights_dev[0]
-        cross = ~np.asarray(auto_comb, dtype=bool)[: direct.shape[0]]
-        if not cross.any():
-            return direct.copy()
-        module = self.backend.module
-        # one set of launches for all combinations (was one per combination)
-        keep = module.asarray(cross.reshape((-1,) + (1,) * (direct.ndim - 1)))
-        return module.where(keep, direct + sumofweights_dev[1], direct)
-
     def _finish_xipm_tomo(
         self,
         out_num: Any,
         out_den: Any,
-        sumofweights_dev: Any,
-        auto_comb: np.ndarray,
         nzbin_combs: int,
     ) -> Tuple[Any, Any]:
         """Normalise the ``(2, ncomb, nbins_total)`` numerators of the
-        tomographic ξ± kernels (ratio of the orientation sums)."""
-        den = self._symmetrised_denominators(out_den, sumofweights_dev, auto_comb)
+        tomographic ξ± kernels (ratio of the orientation sums); ``out_den``
+        is the kernel's own weight sum, both orientations included."""
         # Normalise both orientations of every combination in one go: the
         # per-combination loop issued ~12 tiny kernels per combination, which
         # dominated the per-call launch latency at nside 512.
-        xip, xim = self._finish_pair_sums((out_num[0], out_num[1]), den, nzbin_combs)
+        xip, xim = self._finish_pair_sums(
+            (out_num[0], out_num[1]), out_den, nzbin_combs
+        )
         return xip, xim
 
     def _finish_pair_sums(
@@ -4067,7 +3743,6 @@ class Integrated3PCF:
         self,
         shear_maps_dev: Any,
         w_dev: Any,
-        sumofweights_dev: Any,
         nzbins: int,
         nzbin_combs: int,
         g1_fac: int,
@@ -4084,7 +3759,6 @@ class Integrated3PCF:
             return self._xipm_tomo_vectorized_cpu(
                 shear_maps_dev,
                 w_dev,
-                sumofweights_dev,
                 nzbins,
                 nzbin_combs,
             )
@@ -4153,15 +3827,12 @@ class Integrated3PCF:
             if not launched:
                 return None
 
-        return self._finish_xipm_tomo(
-            out_num, out_den, sumofweights_dev, auto_comb, nzbin_combs
-        )
+        return self._finish_xipm_tomo(out_num, out_den, nzbin_combs)
 
     def _xipm_tomo_vectorized_cpu(
         self,
         shear_maps_dev: Any,
         w_dev: Any,
-        sumofweights_dev: Any,
         nzbins: int,
         nzbin_combs: int,
     ) -> Tuple[Any, Any]:
@@ -4195,15 +3866,12 @@ class Integrated3PCF:
             raise RuntimeError(
                 "Backend tomography vectorized kernel unavailable for CPU backend."
             )
-        return self._finish_xipm_tomo(
-            out_num, out_w, sumofweights_dev, auto_comb, nzbin_combs
-        )
+        return self._finish_xipm_tomo(out_num, out_w, nzbin_combs)
 
     def _gg_pairs(
         self,
         shear_maps: np.ndarray,
         w: np.ndarray,
-        sumofweights: Optional[np.ndarray] = None,
         flip_g1: bool = False,
         flip_g2: bool = False,
         return_device: bool = True,
@@ -4219,34 +3887,6 @@ class Integrated3PCF:
         shear_maps_dev = self._to_backend_array(shear_maps_arr, dtype=self.map_dtype)
         w_dev = self._to_backend_array(w_arr, dtype=self.map_dtype)
 
-        if sumofweights is None:
-            # Both backends: the vectorized kernel accumulates the weight
-            # sums (denominators) in the same pass over the pairs, so no
-            # separate reduction or fingerprint/cache machinery is needed.
-            sumofweights_dev = None
-        else:
-            sumofweights_arr = (
-                sumofweights
-                if self._is_backend_native_array(sumofweights)
-                else np.asarray(sumofweights, dtype=self.map_dtype)
-            )
-            if sumofweights_arr.ndim < 2:
-                raise ValueError(
-                    "sumofweights must have at least two dimensions with "
-                    "shape (2, nzbin_combs, ...)"
-                )
-            if (
-                sumofweights_arr.shape[0] != 2
-                or sumofweights_arr.shape[1] != nzbin_combs
-            ):
-                raise ValueError(
-                    f"sumofweights must have first dimensions (2, {nzbin_combs}); "
-                    f"got {sumofweights_arr.shape}"
-                )
-            sumofweights_dev = self._to_backend_array(
-                sumofweights_arr, dtype=self.map_dtype
-            )
-
         g1_fac, g2_fac = 1, 1
         if flip_g1:
             g1_fac = -1
@@ -4256,7 +3896,6 @@ class Integrated3PCF:
         vectorized_xipm = self._xipm_tomo_vectorized(
             shear_maps_dev,
             w_dev,
-            sumofweights_dev,
             nzbins,
             nzbin_combs,
             g1_fac,
@@ -4451,7 +4090,6 @@ class Integrated3PCF:
         self,
         shear_maps: np.ndarray,
         w: np.ndarray,
-        sumofweights: Optional[np.ndarray] = None,
         aperture_filter: Optional[Callable[..., Any]] = None,
         flip_g1: bool = False,
         flip_g2: bool = False,
@@ -4476,7 +4114,6 @@ class Integrated3PCF:
             xi_p, xi_m = self._gg_pairs(
                 shear_dev,
                 w_dev,
-                sumofweights=sumofweights,
                 flip_g1=flip_g1,
                 flip_g2=flip_g2,
                 return_device=return_device,
@@ -4487,7 +4124,6 @@ class Integrated3PCF:
         self,
         density_maps: np.ndarray,
         w: np.ndarray,
-        sumofweights: Optional[np.ndarray] = None,
         gc_auto_correlations_only: bool = False,
         aperture_filter: Optional[Callable[..., Any]] = None,
         return_device: bool = True,
@@ -4508,7 +4144,6 @@ class Integrated3PCF:
             xi_g = self._kk_pairs(
                 density_dev,
                 w_dev,
-                sumofweights=sumofweights,
                 gc_auto_correlations_only=gc_auto_correlations_only,
                 return_device=return_device,
             )
@@ -4520,7 +4155,6 @@ class Integrated3PCF:
         shear_maps: np.ndarray,
         density_weights: np.ndarray,
         shear_weights: np.ndarray,
-        sumofweights: Optional[np.ndarray] = None,
         ggl_bin_combinations: Optional[Sequence[Tuple[int, int]]] = None,
         aperture_filter: Optional[Callable[..., Any]] = None,
         return_N_ap: bool = False,
@@ -4570,7 +4204,6 @@ class Integrated3PCF:
                 shear_dev,
                 density_w_dev,
                 shear_w_dev,
-                sumofweights=sumofweights,
                 ggl_bin_combinations=ggl_bin_combinations,
                 flip_g1=flip_g1,
                 flip_g2=flip_g2,
@@ -4608,7 +4241,6 @@ class Integrated3PCF:
         self,
         density_maps: np.ndarray,
         weights: np.ndarray,
-        sumofweights: Optional[np.ndarray],
         nzbins: int,
         gc_auto_correlations_only: bool = False,
     ) -> Any:
@@ -4638,14 +4270,6 @@ class Integrated3PCF:
                 gc_auto_correlations_only=gc_auto_correlations_only,
             )
         )
-
-        if sumofweights is not None:
-            sumofweights_dev = self._normalize_tomo_sumofweights_directional(
-                sumofweights, nzbin_combs
-            )
-        else:
-            # Both backends: the kernel accumulates the denominators itself.
-            sumofweights_dev = None
 
         bin_offsets = module.ascontiguousarray(
             self.tot_bins_reduceat_dev.astype(module.int64, copy=False)
@@ -4720,7 +4344,8 @@ class Integrated3PCF:
                         "tomography kernel launch."
                     )
 
-        den = self._symmetrised_denominators(out_den, sumofweights_dev, auto_comb)
+        # Both backends: the kernel accumulates the denominators itself.
+        den = out_den
         return self._finish_pair_sums((out_num,), den, nzbin_combs)[0]
 
     def _density_shear_tomo_vectorized(
@@ -4729,7 +4354,6 @@ class Integrated3PCF:
         shear_maps: np.ndarray,
         density_w: np.ndarray,
         shear_w: np.ndarray,
-        sumofweights: Optional[np.ndarray],
         nlens_bins: int,
         nsource_bins: int,
         ggl_bin_combinations: Optional[Sequence[Tuple[int, int]]] = None,
@@ -4855,37 +4479,9 @@ class Integrated3PCF:
 
         num_ab = out_num
 
-        if sumofweights is None:
-            # In-kernel denominator: already the A→B + B→A weight sum
-            # (both backends).
-            sum_total = out_den
-        else:
-            if (
-                self._is_backend_native_array(sumofweights)
-                and sumofweights.ndim >= 2
-                and sumofweights.shape[0] == 2
-            ):
-                sum_dir = self._normalize_tomo_sumofweights_directional(
-                    sumofweights, nzbin_combs
-                )
-                sum_total = sum_dir[0] + sum_dir[1]
-            elif self._is_backend_native_array(sumofweights):
-                sum_total = self._normalize_tomo_sumofweights_per_comb(
-                    sumofweights, nzbin_combs
-                )
-            else:
-                sum_np = np.asarray(
-                    self.backend.to_numpy(sumofweights), dtype=self.map_dtype
-                )
-                if sum_np.ndim >= 2 and sum_np.shape[0] == 2:
-                    sum_dir = self._normalize_tomo_sumofweights_directional(
-                        sum_np, nzbin_combs
-                    )
-                    sum_total = sum_dir[0] + sum_dir[1]
-                else:
-                    sum_total = self._normalize_tomo_sumofweights_per_comb(
-                        sum_np, nzbin_combs
-                    )
+        # In-kernel denominator: already the A→B + B→A weight sum (both
+        # backends).
+        sum_total = out_den
 
         return self._finish_pair_sums((num_ab,), sum_total, nzbin_combs)[0]
 
@@ -4893,7 +4489,6 @@ class Integrated3PCF:
         self,
         density_maps: np.ndarray,
         w: np.ndarray,
-        sumofweights: Optional[np.ndarray] = None,
         gc_auto_correlations_only: bool = False,
         return_device: bool = True,
     ) -> Any:
@@ -4909,7 +4504,6 @@ class Integrated3PCF:
         wtheta = self._density_density_tomo_vectorized(
             density_arr,
             w_arr,
-            sumofweights,
             nzbins,
             gc_auto_correlations_only,
         )
@@ -4923,7 +4517,6 @@ class Integrated3PCF:
         shear_maps: np.ndarray,
         density_weights: np.ndarray,
         shear_weights: np.ndarray,
-        sumofweights: Optional[np.ndarray] = None,
         ggl_bin_combinations: Optional[Sequence[Tuple[int, int]]] = None,
         flip_g1: bool = False,
         flip_g2: bool = False,
@@ -4991,7 +4584,6 @@ class Integrated3PCF:
             shear_arr,
             wd_arr,
             ws_arr,
-            sumofweights,
             nlens_bins,
             nsource_bins,
             ggl_bin_combinations=ggl_bin_combinations,
@@ -5000,57 +4592,6 @@ class Integrated3PCF:
         if return_device and self.backend.name == "cupy":
             return self.backend.module.real(gammat)
         return np.real(self.backend.to_numpy(gammat))
-
-    def zeta_g_plus(self, M_g: np.ndarray, xi_p: np.ndarray) -> Any:
-        """Compute zeta_g_plus with g at center and xi+ on annulus."""
-        return _zeta_g_plus_helper(M_g, xi_p)
-
-    def zeta_g_minus(self, M_g: np.ndarray, xi_m: np.ndarray) -> Any:
-        """Compute zeta_g_minus with g at center and xi- on annulus."""
-        return _zeta_g_minus_helper(M_g, xi_m)
-
-    def zeta_a_plus(self, M_a: np.ndarray, xi_p: np.ndarray) -> Any:
-        """Compute zeta_a_plus with a at center and xi+ on annulus."""
-        return _zeta_a_plus_helper(M_a, xi_p)
-
-    def zeta_a_minus(self, M_a: np.ndarray, xi_m: np.ndarray) -> Any:
-        """Compute zeta_a_minus with a at center and xi- on annulus."""
-        return _zeta_a_minus_helper(M_a, xi_m)
-
-    def zeta_g_g(self, M_g: np.ndarray, xi_g: np.ndarray) -> Any:
-        """Compute zeta_g_g with g at center and galaxy auto-correlation on annulus."""
-        return _zeta_g_g_helper(M_g, xi_g)
-
-    def zeta_a_g(self, M_a: np.ndarray, xi_g: np.ndarray) -> Any:
-        """Compute zeta_a_g with a at center and galaxy auto-correlation on annulus."""
-        return _zeta_a_g_helper(M_a, xi_g)
-
-    def zeta_g_t(self, M_g: np.ndarray, xi_t: np.ndarray) -> Any:
-        """Compute zeta_g_t with g at center and tangential shear on annulus."""
-        return _zeta_g_t_helper(M_g, xi_t)
-
-    def zeta_a_t(self, M_a: np.ndarray, xi_t: np.ndarray) -> Any:
-        """Compute zeta_a_t with a at center and tangential shear on annulus."""
-        return _zeta_a_t_helper(M_a, xi_t)
-
-    def calculate_all_zetas(
-        self,
-        M_g: Optional[np.ndarray] = None,
-        M_a: Optional[np.ndarray] = None,
-        xi_p: Optional[np.ndarray] = None,
-        xi_m: Optional[np.ndarray] = None,
-        xi_g: Optional[np.ndarray] = None,
-        xi_t: Optional[np.ndarray] = None,
-    ) -> Dict[str, np.ndarray]:
-        """Calculate all supported i3PCFs with explicit center/annulus naming."""
-        return _calculate_all_zetas_helper(
-            M_g=M_g,
-            M_a=M_a,
-            xi_p=xi_p,
-            xi_m=xi_m,
-            xi_g=xi_g,
-            xi_t=xi_t,
-        )
 
     def _compute_3x2pt_tomo_fused(
         self,
@@ -5639,7 +5180,6 @@ class Integrated3PCF:
         aperture_filter: Optional[Callable[..., Any]] = None,
         flip_g1: bool = False,
         flip_g2: bool = False,
-        sumofweights: Optional[np.ndarray] = None,
         return_device: bool = True,
     ) -> IntegratedResult:
         """Shear ξ± in every patch and (``apertures=True``) the aperture mass
@@ -5653,7 +5193,6 @@ class Integrated3PCF:
             M_a, xi_p, xi_m = self._gg_full(
                 shear_maps,
                 w,
-                sumofweights=sumofweights,
                 aperture_filter=aperture_filter,
                 flip_g1=flip_g1,
                 flip_g2=flip_g2,
@@ -5664,7 +5203,6 @@ class Integrated3PCF:
             xi_p, xi_m = self._gg_pairs(
                 shear_maps,
                 w,
-                sumofweights=sumofweights,
                 flip_g1=flip_g1,
                 flip_g2=flip_g2,
                 return_device=return_device,
@@ -5684,7 +5222,6 @@ class Integrated3PCF:
         apertures: bool = True,
         auto_only: bool = False,
         aperture_filter: Optional[Callable[..., Any]] = None,
-        sumofweights: Optional[np.ndarray] = None,
         return_device: bool = True,
     ) -> IntegratedResult:
         """Scalar-field (overdensity δ or convergence κ) w(θ) in every patch
@@ -5700,7 +5237,6 @@ class Integrated3PCF:
             M_g, xi_g = self._kk_full(
                 k_maps,
                 w,
-                sumofweights=sumofweights,
                 gc_auto_correlations_only=auto_only,
                 aperture_filter=aperture_filter,
                 return_device=return_device,
@@ -5710,7 +5246,6 @@ class Integrated3PCF:
             xi_g = self._kk_pairs(
                 k_maps,
                 w,
-                sumofweights=sumofweights,
                 gc_auto_correlations_only=auto_only,
                 return_device=return_device,
             )
@@ -5733,7 +5268,6 @@ class Integrated3PCF:
         aperture_filter: Optional[Callable[..., Any]] = None,
         flip_g1: bool = False,
         flip_g2: bool = False,
-        sumofweights: Optional[np.ndarray] = None,
         return_device: bool = True,
         k_aperture_filter: Optional[Callable[..., Any]] = None,
     ) -> IntegratedResult:
@@ -5755,7 +5289,6 @@ class Integrated3PCF:
                 shear_maps,
                 k_weights,
                 shear_weights,
-                sumofweights=sumofweights,
                 ggl_bin_combinations=combinations,
                 aperture_filter=aperture_filter,
                 return_N_ap=m_g,
@@ -5775,7 +5308,6 @@ class Integrated3PCF:
                 shear_maps,
                 k_weights,
                 shear_weights,
-                sumofweights=sumofweights,
                 ggl_bin_combinations=combinations,
                 flip_g1=flip_g1,
                 flip_g2=flip_g2,

@@ -38,9 +38,6 @@ class ComputeContext:
     degrade_ops: Any
     degrade_csr: Any
     frozen_map_memo: Any
-    _tomo_sumofweights_cache: Any
-    _tomo_sumofweights_cache_w_fingerprint: Any
-    _tomo_sumofweights_cache_prepare_version: Any
     _xipm_sumofweights_cache: Any
     _xipm_sumofweights_cache_w_fingerprint: Any
     _xipm_sumofweights_cache_prepare_version: Any
@@ -93,9 +90,6 @@ class ComputeContext:
     # Cached weight sums Σw_i·w_j used to normalise ξ and γ_t estimators;
     # invalidated when weights change or pairs are re-prepared
     _WEIGHT_CACHE_DEFAULTS: Tuple[Tuple[str, Any], ...] = (
-        ("_tomo_sumofweights_cache", None),
-        ("_tomo_sumofweights_cache_w_fingerprint", None),
-        ("_tomo_sumofweights_cache_prepare_version", None),
         ("_xipm_sumofweights_cache", None),
         ("_xipm_sumofweights_cache_w_fingerprint", None),
         ("_xipm_sumofweights_cache_prepare_version", None),

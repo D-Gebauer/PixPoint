@@ -13,9 +13,8 @@ patch estimator:
    tiled / packed CUDA kernels, static treecode, row space, sign flips),
    with tiles in the role of patches;
 3. the result (:class:`~CosmoFuse.results.TwoPointResult`) holds the
-   per-tile numerators and weight sums; the estimate is their ratio over the
-   whole footprint (ratio of sums, TreeCorr's definition), and
-   ``jackknife()`` gives the delete-one-tile estimates.
+   numerators and weight sums over the whole footprint; the estimate is
+   their ratio (ratio of sums, TreeCorr's definition).
 
 Internally the tile pairs are handed to an :class:`Integrated3PCF` whose
 groups are tiles (:class:`_TileEngine`); it only overrides the normalisation
@@ -25,8 +24,9 @@ path fast is therefore shared, not duplicated.
 With ``device=[0, 1, ...]`` every device gets an engine of its own holding a
 contiguous range of tiles (balanced by pair count) and the whole row space,
 treecode cells included -- a pair may reach into a tile another device owns.
-Measurements run in one thread per device and the per-tile sums are
-concatenated in tile order, so the result is bitwise that of one device.
+Measurements run in one thread per device; every device reduces its own
+tiles and the devices' totals are added in device order, so the result equals
+that of one device up to the summation order of that final add.
 """
 
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -107,8 +107,8 @@ class Global2PCF:
             ids.  A list splits the tiles across the devices (contiguous
             ranges with about equal pair counts, ``tile_ranges``); each device
             holds its share of the pairs and a copy of the maps.  Measurements
-            then take host arrays and return host results, bitwise equal to
-            a single-device run.
+            then take host arrays and return host results, equal to a
+            single-device run up to the order of the final add.
         map_precision, rotation_precision, accumulation_precision,
         resolution_factor, pair_search_precision, pack_pairs, fastmath:
             as for :class:`~CosmoFuse.correlations.Integrated3PCF`.  The
@@ -722,40 +722,36 @@ class Global2PCF:
         captured: Sequence[Tuple[Tuple[Any, ...], Any, int]],
         return_device: bool,
     ) -> TwoPointResult:
-        """Label the captured sums of every engine, tiles in tile order."""
+        """Reduce the captured per-tile sums of every engine over its tiles
+        (in float64) and add the engines' totals in device order."""
         parts = []
         for eng, (nums, den, ncomb) in zip(self._engines, captured):
             xp = eng.backend.module
             shape = (ncomb, eng.n_patches, self.nbins)
-            acc = getattr(xp, eng.acc_dtype.name)
-            tile_num = {
-                n: xp.real(a).reshape(shape).astype(acc, copy=False)
+            num = {
+                n: xp.real(a).reshape(shape).astype(xp.float64).sum(axis=1)
                 for n, a in zip(names, nums)
             }
-            tile_weight = xp.real(den).reshape(shape).astype(acc, copy=False)
-            parts.append((eng, tile_num, tile_weight))
+            weight = xp.real(den).reshape(shape).astype(xp.float64).sum(axis=1)
+            parts.append((eng, num, weight))
         combos = tuple((int(a), int(b)) for a, b in combinations)
         binedges = np.asarray(self.binedges).copy()
         if len(parts) == 1:
-            eng, tile_num, tile_weight = parts[0]
+            eng, num, weight = parts[0]
             if return_device and eng.backend.name == "cupy":
-                return TwoPointResult(
-                    statistic, binedges, combos, tile_num, tile_weight
-                )
+                return TwoPointResult(statistic, binedges, combos, num, weight)
 
         def host(eng: Any, a: Any) -> np.ndarray:
             return np.asarray(eng.backend.to_numpy(a))
 
-        return TwoPointResult(
-            statistic,
-            binedges,
-            combos,
-            {
-                n: np.concatenate([host(eng, t[n]) for eng, t, _ in parts], axis=1)
-                for n in names
-            },
-            np.concatenate([host(eng, w) for eng, _, w in parts], axis=1),
-        )
+        eng, num, weight = parts[0]
+        total_num = {n: host(eng, num[n]) for n in names}
+        total_weight = host(eng, weight)
+        for eng, num, weight in parts[1:]:
+            for n in names:
+                total_num[n] = total_num[n] + host(eng, num[n])
+            total_weight = total_weight + host(eng, weight)
+        return TwoPointResult(statistic, binedges, combos, total_num, total_weight)
 
     def _check_inputs(self, name: str, *arrays: Any) -> None:
         if len(self._engines) > 1:
@@ -779,7 +775,6 @@ class Global2PCF:
         res = e._xipm_tomo_vectorized(
             shear_dev,
             w_dev,
-            None,
             nz,
             ncomb,
             -1 if flip_g1 else 1,
@@ -801,7 +796,7 @@ class Global2PCF:
             raise ValueError(f"k_maps must be (nz, npix); got {arr.shape}")
         nz = int(arr.shape[0])
         e._density_density_tomo_vectorized(
-            arr, w, None, nz, gc_auto_correlations_only=auto_only
+            arr, w, nz, gc_auto_correlations_only=auto_only
         )
         return e.take_captured(), Integrated3PCF.tomo_combinations(nz, auto_only)
 
@@ -837,7 +832,6 @@ class Global2PCF:
             s_arr,
             wd,
             ws,
-            None,
             nl,
             ns,
             ggl_bin_combinations=combinations,

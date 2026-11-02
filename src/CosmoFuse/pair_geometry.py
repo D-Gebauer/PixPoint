@@ -464,7 +464,7 @@ class PairGeometry:
                 patch_cells.append(result[3])
             else:
                 # Full resolution: the single-level search, unchanged.
-                result = owner.__get_pairs_helper__(i)
+                result = PairGeometry.get_pairs_helper(owner, i)
 
             pair_inds.append(result[0])
             pair_exp2phi.append(result[1])
@@ -695,9 +695,8 @@ class PairGeometry:
         )
 
         for i in trange(owner.n_patches, desc="M_a data", unit=" patches"):
-            q_cos, q_sin, q_val, q_inds, q_patch_area = owner.__get_pairs_M_a_helper__(
-                i,
-                aperture_filter=filter_fn,
+            q_cos, q_sin, q_val, q_inds, q_patch_area = (
+                PairGeometry.get_pairs_M_a_helper(owner, i, aperture_filter=filter_fn)
             )
             owner.Q_cos.append(q_cos)
             owner.Q_sin.append(q_sin)

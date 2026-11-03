@@ -4,7 +4,15 @@ PixPoint needs Python 3.12 or newer and runs on Linux and macOS. Its
 dependencies are NumPy, SciPy, Numba, healpy, h5py and tqdm, all of which pip
 installs for you.
 
+## From PyPI
+
+```bash
+pip install pixpoint
+```
+
 ## From GitHub
+
+The development version:
 
 ```bash
 pip install git+https://github.com/D-Gebauer/PixPoint.git
@@ -18,8 +26,6 @@ cd PixPoint
 pip install -e ".[dev]"
 ```
 
-A release on PyPI (`pip install pixpoint`) will follow the 8.0.0 release.
-
 ## GPU support (optional)
 
 Everything in PixPoint works on the CPU. To run on an NVIDIA GPU, install
@@ -27,9 +33,14 @@ Everything in PixPoint works on the CPU. To run on an NVIDIA GPU, install
 the same environment, for example
 
 ```bash
-pip install cupy-cuda12x        # CUDA 12
+pip install "pixpoint[gpu]"     # PixPoint + cupy-cuda12x
+pip install cupy-cuda12x        # CUDA 12 (what the gpu extra installs)
 pip install cupy-cuda13x        # CUDA 13
 ```
+
+The CUDA 12 build runs on any driver that supports CUDA 12 or newer. Install
+only one of the CuPy packages, and not the plain `cupy` package, which builds
+CuPy from source.
 
 PixPoint's GPU kernels are compiled the first time they are used, by the CUDA
 runtime compiler that ships with CuPy; no compiler or CUDA toolkit installation

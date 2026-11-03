@@ -25,6 +25,13 @@ gains CONTRIBUTING.md, a Contributor Covenant code of conduct, SECURITY.md,
 CITATION.cff, issue and pull-request templates; the README is rewritten
 around `Global2PCF`.
 
+**Packaging.** PixPoint is on PyPI (`pip install pixpoint`) and archived on
+Zenodo with a DOI per release. A published GitHub release triggers
+`.github/workflows/publish.yml`, which builds, checks and test-installs the
+sdist and wheel and uploads them by trusted publishing; `.zenodo.json` holds
+the Zenodo metadata. The `gpu` extra installs `cupy-cuda12x` (it named
+`cupy`, CuPy's source distribution, which compiles on install).
+
 **Breaking.** The estimators lose the two pieces of error estimation they
 had grown. PixPoint measures; covariances, jackknives and projections are
 the analysis's job. Before and after:

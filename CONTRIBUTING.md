@@ -66,6 +66,16 @@ lint job and the test matrix on every pull request. Small, focused pull
 requests are reviewed quickly; a large one is easier to review if it comes
 with a short design note in the description.
 
+## Releasing
+
+1. Set the version in `pyproject.toml` and `CITATION.cff` (`version`,
+   `date-released`) and date the `CHANGELOG.md` entry.
+2. Re-run the GPU tests and coverage upload
+   (`benchmarks/static_treecode/gpu_coverage.sh`).
+3. Commit, push, tag `vX.Y.Z` and publish a GitHub release for the tag. The
+   release uploads the package to PyPI (`.github/workflows/publish.yml`,
+   trusted publishing) and Zenodo archives it and mints its DOI.
+
 ## Code of conduct
 
 This project follows the [Contributor Covenant](https://github.com/D-Gebauer/PixPoint/blob/main/CODE_OF_CONDUCT.md). Be kind.

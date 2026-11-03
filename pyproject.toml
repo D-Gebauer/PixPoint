@@ -38,7 +38,9 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = [
-    "cupy>=13.0.0",
+    # The CUDA 12 wheel: plain "cupy" is the source distribution and compiles
+    # CuPy on install. CUDA 13 users install cupy-cuda13x themselves.
+    "cupy-cuda12x>=13.0.0",
 ]
 dev = [
     "pytest>=7.0.0",

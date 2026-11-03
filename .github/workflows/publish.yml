@@ -1,0 +1,70 @@
+name: Publish to PyPI
+
+# A published GitHub release builds the sdist and wheel, checks them and
+# uploads them to PyPI by trusted publishing (no API token: PyPI trusts this
+# workflow in the `pypi` environment of D-Gebauer/PixPoint). Started by hand,
+# the workflow only builds and checks -- a dry run that uploads nothing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Build sdist and wheel
+      run: |
+        pip install --upgrade pip build twine
+        python -m build
+        twine check --strict dist/*
+
+    - name: The release tag names the version that was built
+      if: github.event_name == 'release'
+      run: |
+        version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        test "${GITHUB_REF_NAME}" = "v${version}" || {
+          echo "tag ${GITHUB_REF_NAME} does not match version ${version}"; exit 1; }
+        ls dist/pixpoint-${version}.tar.gz dist/pixpoint-${version}-py3-none-any.whl
+
+    - name: Install the wheel in a clean environment and import it
+      run: |
+        python -m venv /tmp/wheeltest
+        /tmp/wheeltest/bin/pip install dist/*.whl
+        cd /tmp && /tmp/wheeltest/bin/python -c "
+        import importlib.resources as r, pixpoint
+        from pixpoint import Integrated3PCF, Global2PCF, Global3PCF, OnePoint
+        n = len([f for f in (r.files('pixpoint') / 'cuda').iterdir() if f.name.endswith(('.cu', '.cuh'))])
+        assert n > 0, 'CUDA sources missing from the wheel'
+        print('pixpoint', pixpoint.__version__, 'with', n, 'CUDA sources')
+        "
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  publish:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pixpoint/
+    permissions:
+      id-token: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - uses: pypa/gh-action-pypi-publish@release/v1

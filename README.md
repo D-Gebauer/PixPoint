@@ -3,7 +3,9 @@
 [![CI](https://github.com/D-Gebauer/PixPoint/actions/workflows/ci.yml/badge.svg)](https://github.com/D-Gebauer/PixPoint/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/D-Gebauer/PixPoint/graph/badge.svg?token=F4JC08UEJP)](https://codecov.io/github/D-Gebauer/PixPoint)
 [![Documentation](https://img.shields.io/readthedocs/pixpoint/latest?logo=readthedocs&logoColor=white)](https://pixpoint.readthedocs.io)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/pixpoint?logo=pypi&logoColor=white)](https://pypi.org/project/pixpoint/)
+[![DOI](https://zenodo.org/badge/1161690205.svg)](https://zenodo.org/badge/latestdoi/1161690205)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/D-Gebauer/PixPoint/blob/main/LICENSE)
 
 **Correlation functions of HEALPix maps, fast.**
 
@@ -72,12 +74,13 @@ tomographic, and every result carries the labels of its rows.
 Python 3.12 or newer:
 
 ```bash
-pip install git+https://github.com/D-Gebauer/PixPoint.git
+pip install pixpoint             # CPU
+pip install "pixpoint[gpu]"      # + CuPy for NVIDIA GPUs (CUDA 12 build)
 ```
 
-For GPUs, install [CuPy](https://docs.cupy.dev/en/stable/install.html) for
-your CUDA version in the same environment (`pip install cupy-cuda12x`, CUDA 12
-or newer); PixPoint picks the GPU automatically. Details, including the
+The `gpu` extra installs `cupy-cuda12x`, which runs on any driver that
+supports CUDA 12 or newer; for a CUDA 13 build install `pixpoint` and
+`cupy-cuda13x` instead. PixPoint picks the GPU automatically. Details, including the
 development install, in the
 [installation guide](https://pixpoint.readthedocs.io/en/latest/install.html).
 
@@ -112,5 +115,5 @@ The BibTeX entry and those papers are on the
 ## Contributing
 
 Issues and pull requests are welcome; see
-[CONTRIBUTING.md](CONTRIBUTING.md). PixPoint is released under the
-[MIT licence](LICENSE).
+[CONTRIBUTING.md](https://github.com/D-Gebauer/PixPoint/blob/main/CONTRIBUTING.md). PixPoint is released under the
+[MIT licence](https://github.com/D-Gebauer/PixPoint/blob/main/LICENSE).

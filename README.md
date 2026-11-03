@@ -7,6 +7,13 @@
 
 **Correlation functions of HEALPix maps, fast.**
 
+<p align="center">
+  <a href="https://pixpoint.readthedocs.io"><b>Documentation</b></a> ·
+  <a href="https://pixpoint.readthedocs.io/en/latest/quickstart.html">Getting started</a> ·
+  <a href="https://pixpoint.readthedocs.io/en/latest/install.html">Installation</a> ·
+  <a href="https://pixpoint.readthedocs.io/en/latest/citing.html">Citing</a>
+</p>
+
 PixPoint measures two-point, three-point, integrated three-point and one-point
 statistics of cosmological fields on HEALPix maps: cosmic shear, galaxy
 clustering, galaxy-galaxy lensing, convergence. You give it maps and weights,
@@ -28,9 +35,6 @@ res.combinations                         # which tomographic bins each row is
 g2.kk(delta_maps, w_cov).xi              # clustering w(theta)
 g2.kg(delta_maps, shear_maps, w_lens, w_source).xi   # galaxy-galaxy lensing gamma_t
 ```
-
-**Documentation: [pixpoint.readthedocs.io](https://pixpoint.readthedocs.io)**,
-starting with [Getting started](https://pixpoint.readthedocs.io/en/latest/quickstart.html).
 
 ## What it measures
 

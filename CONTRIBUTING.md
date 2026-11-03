@@ -32,7 +32,9 @@ Useful commands (see the `Makefile`):
 | `make docs` | build the documentation into `docs/_build/html` |
 
 The GPU tests (`pytest -m gpu`) need an NVIDIA GPU with CuPy; CI does not run
-them, so say in a pull request whether you ran them.
+them, so say in a pull request whether you ran them. Their coverage reaches
+Codecov separately: the maintainer measures it on an A100 and uploads it as the
+`gpu` flag (`benchmarks/static_treecode/gpu_coverage.sh`, see `codecov.yml`).
 
 ## What a change needs
 

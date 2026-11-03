@@ -1,0 +1,23 @@
+# Coverage comes from two kinds of run, uploaded under separate flags:
+#   cpu -- GitHub Actions on every push (pytest -m "not gpu");
+#   gpu -- the A100 run of benchmarks/static_treecode/gpu_coverage.sh
+#          (pytest -m gpu), started by hand after GPU changes and before a release.
+# Codecov merges the flags of a commit; carryforward reuses a flag's last report
+# on commits that have no upload for it, so the GPU lines stay counted between
+# A100 runs (as of the commit they were measured on).
+flag_management:
+  default_rules:
+    carryforward: true
+
+coverage:
+  status:
+    # Commit checks for information only: they never mark a commit as failed.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: 90%
+        informational: true

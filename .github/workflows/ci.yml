@@ -60,11 +60,12 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         file: ./coverage.xml
+        # The CPU half of the coverage; the GPU half is uploaded from the
+        # A100 by benchmarks/static_treecode/gpu_coverage.sh (codecov.yml).
+        flags: cpu
         token: ${{ secrets.CODECOV_TOKEN }}
-        # v4 requires a token. Without one the upload fails and, with
-        # fail_ci_if_error, turns the whole run red for a reason that has
-        # nothing to do with the code -- so this stays false until the
-        # secret is set in the repository.
+        # A Codecov outage must not turn the run red for a reason that has
+        # nothing to do with the code.
         fail_ci_if_error: false
 
   docs:

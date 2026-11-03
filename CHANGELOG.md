@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- PyPI classifier `Development Status :: 5 - Production/Stable` (was
+  `4 - Beta`, left over from 2025).
+- Citing: the Zenodo DOI (`CITATION.cff`, `docs/citing.md`), one per release
+  plus `10.5281/zenodo.23915406` for all versions.
+
 ## 8.0.1 (2026-11-03)
 
 **Fix: the GPU kernels compile with CuPy 13 again.** Two comment lines added

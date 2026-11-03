@@ -13,7 +13,7 @@ Pairs are sorted by angular bin for cache-efficient access during
 the correlation measurement kernels.
 """
 
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import numpy as np
 
@@ -46,88 +46,6 @@ class PairFinder:
         self.rotation_complex_dtype = rotation_complex_dtype
         self.kernel = kernel
 
-    def get_pairs_patch(
-        self,
-        patch_inds: np.ndarray,
-        ra: np.ndarray,
-        dec: np.ndarray,
-    ) -> Tuple[List[np.ndarray], np.ndarray]:
-        """Find all pixel pairs within angular separation bins for a patch.
-
-        Returns:
-            all_inds: List of (2, npairs_in_bin) index arrays, one per θ bin.
-            exp2phi:  (2, total_npairs) complex rotation factors.
-                      Row 0 = e^{2iφ_i}, row 1 = e^{2iφ_j}, where φ is the
-                      position angle used to rotate shear into the pair frame.
-        """
-        ra_local = np.asarray(ra, dtype=self.search_dtype)
-        dec_local = np.asarray(dec, dtype=self.search_dtype)
-        binedges_local = np.asarray(self.binedges, dtype=self.search_dtype)
-        patch_inds_local = np.asarray(patch_inds, dtype=self.index_dtype)
-
-        if patch_inds_local.size < 2:
-            all_inds = [
-                np.empty((2, 0), dtype=self.index_dtype) for _ in range(self.nbins)
-            ]
-            return all_inds, np.empty((2, 0), dtype=self.rotation_complex_dtype)
-
-        # Compute angular separations and rotation angles for all pixel pairs
-        (
-            inds_a,
-            inds_b,
-            exp2phi1_real,
-            exp2phi1_imag,
-            exp2phi2_real,
-            exp2phi2_imag,
-            bin_counts,
-        ) = self.kernel(
-            patch_inds_local,
-            ra_local,
-            dec_local,
-            binedges_local,
-        )
-
-        npairs = inds_a.size
-        if npairs == 0:
-            all_inds = [
-                np.empty((2, 0), dtype=self.index_dtype) for _ in range(self.nbins)
-            ]
-            return all_inds, np.empty((2, 0), dtype=self.rotation_complex_dtype)
-
-        # The kernel already writes pairs grouped by angular bin (rows in
-        # ascending order inside a bin), which is what the measurement
-        # kernels want -- no sort, no gathers.
-
-        # Assemble complex rotation factors e^{2iφ} for each pair member
-        exp2phi1 = (
-            exp2phi1_real.astype(self.rotation_dtype, copy=False)
-            + 1j * exp2phi1_imag.astype(self.rotation_dtype, copy=False)
-        ).astype(self.rotation_complex_dtype, copy=False)
-        exp2phi2 = (
-            exp2phi2_real.astype(self.rotation_dtype, copy=False)
-            + 1j * exp2phi2_imag.astype(self.rotation_dtype, copy=False)
-        ).astype(self.rotation_complex_dtype, copy=False)
-        exp2phi = np.vstack((exp2phi1, exp2phi2)).astype(
-            self.rotation_complex_dtype, copy=False
-        )
-
-        # Split pairs into per-bin groups; the kernel returns the per-bin
-        # counts, so the group boundaries are a prefix sum of those.
-        boundaries = np.zeros(self.nbins + 1, dtype=np.int64)
-        boundaries[1:] = np.cumsum(np.asarray(bin_counts[: self.nbins], dtype=np.int64))
-        all_inds = []
-        for bin_idx in range(self.nbins):
-            start = boundaries[bin_idx]
-            stop = boundaries[bin_idx + 1]
-            all_inds.append(
-                np.array(
-                    [inds_a[start:stop], inds_b[start:stop]],
-                    dtype=self.index_dtype,
-                )
-            )
-
-        return all_inds, exp2phi
-
     def get_pairs_patch_flat(
         self,
         patch_inds: np.ndarray,
@@ -135,7 +53,7 @@ class PairFinder:
         dec: np.ndarray,
         binedges: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Like :meth:`get_pairs_patch` but without the per-bin split.
+        """Find all pixel pairs of a patch within the angular bins.
 
         Args:
             binedges: Optional contiguous sub-range of the bin edges (the
@@ -145,10 +63,10 @@ class PairFinder:
         Returns:
             all_inds: (2, npairs) index array, sorted by angular bin.
             exp2phi:  (2, npairs) complex rotation factors, same order.
+                      Row 0 = e^{2iφ_i}, row 1 = e^{2iφ_j}, where φ is the
+                      position angle used to rotate shear into the pair frame.
             ninds:    (nbins,) number of pairs per angular bin (of the
                       edges searched).
-        Avoids splitting the sorted pair arrays into per-bin copies that
-        the caller would immediately re-concatenate.
         """
         ra_local = np.asarray(ra, dtype=self.search_dtype)
         dec_local = np.asarray(dec, dtype=self.search_dtype)

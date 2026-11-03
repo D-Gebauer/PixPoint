@@ -319,20 +319,6 @@ class PairGeometry:
         return PairGeometry.evaluate_aperture_filter(owner, filter_fn, vartheta)
 
     @staticmethod
-    def get_pairs_patch(
-        owner: "Integrated3PCF",
-        patch_inds: np.ndarray,
-        ra: np.ndarray,
-        dec: np.ndarray,
-    ) -> Tuple[List[np.ndarray], np.ndarray]:
-        owner._pair_finder.kernel = owner._compute_pairs_kernel
-        return owner._pair_finder.get_pairs_patch(
-            patch_inds,
-            ra,
-            dec,
-        )
-
-    @staticmethod
     def get_pairs_helper(
         owner: "Integrated3PCF",
         i: int,

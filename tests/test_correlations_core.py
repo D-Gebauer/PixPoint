@@ -9,7 +9,6 @@ from scipy.special import binom
 
 import pixpoint.correlations as correlations_module
 from pixpoint.correlations import Integrated3PCF
-from pixpoint.pair_geometry import PairGeometry
 
 from ._results import fields_of
 
@@ -172,46 +171,7 @@ class TestCorrelation(unittest.TestCase):
                 index_precision="int32",
             )
 
-    def test_get_pairs_patch(self):
-        """Test get_pairs_patch method."""
-        corr = Integrated3PCF(
-            nside=self.nside,
-            phi_center=self.phi_center,
-            theta_center=self.theta_center,
-            nbins=self.nbins,
-        )
-
-        # Create test data
-        patch_inds = np.array([0, 1, 2, 3])
-        ra = np.array([0.0, 0.1, 0.2, 0.3])
-        dec = np.array([0.0, 0.1, 0.2, 0.3])
-
-        all_inds, exp2phi = PairGeometry.get_pairs_patch(corr, patch_inds, ra, dec)
-
-        self.assertIsInstance(all_inds, list)
-        self.assertIsInstance(exp2phi, np.ndarray)
-
-    def test_get_pairs_patch_single_pixel_returns_empty(self):
-        """Test get_pairs_patch early return when fewer than 2 pixels are provided."""
-        corr = Integrated3PCF(
-            nside=self.nside,
-            phi_center=self.phi_center,
-            theta_center=self.theta_center,
-            nbins=self.nbins,
-        )
-
-        patch_inds = np.array([5], dtype=np.uint32)
-        ra = np.array([0.0])
-        dec = np.array([0.0])
-
-        all_inds, exp2phi = PairGeometry.get_pairs_patch(corr, patch_inds, ra, dec)
-
-        self.assertEqual(len(all_inds), corr.nbins)
-        for inds in all_inds:
-            self.assertEqual(inds.shape, (2, 0))
-        self.assertEqual(exp2phi.shape, (2, 0))
-
-    def test_get_pairs_patch_respects_fastmath_flag(self):
+    def test_pair_search_respects_fastmath_flag(self):
         """fastmath=False should use the precise pair kernel."""
         with patch.object(
             correlations_module,
@@ -242,7 +202,8 @@ class TestCorrelation(unittest.TestCase):
         with patch.object(
             corr, "_compute_pairs_kernel", return_value=empty_out
         ) as kernel_mock:
-            PairGeometry.get_pairs_patch(corr, patch_inds, ra, dec)
+            corr._pair_finder.kernel = corr._compute_pairs_kernel
+            corr._pair_finder.get_pairs_patch_flat(patch_inds, ra, dec)
 
         kernel_mock.assert_called_once()
         spy_getter.assert_called_with(False)

@@ -12,6 +12,7 @@ T7   CPU kernels vs emulated-GPU orchestrator paths
 
 import os
 import pickle
+import shutil
 import tempfile
 import unittest
 import warnings
@@ -1004,6 +1005,24 @@ class TestTreecodeIO(TreecodeBase):
             with h5py.File(path, "a") as fp:
                 fp.attrs["format_version"] = 99
             with self.assertRaisesRegex(ValueError, "format version 99"):
+                make_corr(self.mask, resolution_factor=2.0).load_pairs(path)
+
+    def test_refuses_dropped_and_mismatched_files(self):
+        """Files older than MIN_FORMAT_VERSION (one HDF5 group per patch) and
+        a treecode whose aperture level belongs to another mask raise."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "pairs.h5")
+            self.tree.save_pairs(path)
+            old = os.path.join(tmp, "old.h5")
+            shutil.copy(path, old)
+            with h5py.File(old, "a") as fp:
+                fp.attrs["format_version"] = 1
+            with self.assertRaisesRegex(ValueError, "dropped in 6.0"):
+                make_corr(self.mask, resolution_factor=2.0).load_pairs(old)
+            with h5py.File(path, "a") as fp:
+                gp = fp["treecode"]
+                gp.attrs["n_aperture_cells"] = int(gp.attrs["n_aperture_cells"]) + 1
+            with self.assertRaisesRegex(ValueError, "aperture level of the pair file"):
                 make_corr(self.mask, resolution_factor=2.0).load_pairs(path)
 
     @pytest.mark.slow

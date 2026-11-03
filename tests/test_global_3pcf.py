@@ -12,6 +12,7 @@ G6  the GPU launch wrapper + numpy twin of gpu_3pcf_multipoles == CPU.
 """
 
 import os
+import shutil
 import tempfile
 import unittest
 import warnings
@@ -261,6 +262,41 @@ class TestPairFiles(unittest.TestCase):
                 )
             with self.assertRaises(ValueError):
                 wrong.load_pairs(path)
+
+    def test_refuses_a_different_estimator(self):
+        """The checks the round trip does not reach, each on its own."""
+        mask, _, _, _ = _setup()
+        est = _estimator(mask)
+
+        def estimator(m=mask, theta_max=900):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return Global3PCF(
+                    NSIDE,
+                    mask=m,
+                    nbins=3,
+                    theta_min=240,
+                    theta_max=theta_max,
+                    n_max=N_MAX,
+                    tile_nside=2,
+                    device="cpu",
+                )
+
+        smaller = mask.copy()
+        smaller[np.flatnonzero(mask)[0]] = False
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "p3.h5")
+            est.save_pairs(path)
+            with self.assertRaisesRegex(ValueError, "angular range differs"):
+                estimator(theta_max=890).load_pairs(path)
+            with self.assertRaisesRegex(ValueError, r"the mask \(row space\) differs"):
+                estimator(m=smaller).load_pairs(path)
+            newer = os.path.join(tmp, "newer.h5")
+            shutil.copy(path, newer)
+            with h5py.File(newer, "a") as fp:
+                fp.attrs["format_version"] = int(fp.attrs["format_version"]) + 1
+            with self.assertRaisesRegex(ValueError, "newer Global3PCF format"):
+                estimator().load_pairs(newer)
 
 
 class TestBinning(unittest.TestCase):

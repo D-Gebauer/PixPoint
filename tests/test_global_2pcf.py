@@ -17,15 +17,18 @@ G6  pack_host_pairs: the device state is bitwise that of packing in prepare();
 """
 
 import os
+import shutil
 import tempfile
 import unittest
 import warnings
 
+import h5py
 import healpy as hp
 import numpy as np
 import pytest
 
 from pixpoint import Global2PCF, Integrated3PCF, TwoPointResult
+from pixpoint.global_2pcf import FORMAT_VERSION
 from pixpoint.global_geometry import TileSet, radec_to_xyz, search_slack
 
 from .test_gpu_kernel_emulation import emulated_gpu
@@ -295,6 +298,55 @@ class TestPairFiles(unittest.TestCase):
                         )
                     with self.assertRaises(ValueError):
                         wrong.load_pairs(path)
+
+    def test_refuses_a_different_estimator(self):
+        """Every check of load_pairs fires on its own: a pair file of another
+        estimator must raise, never measure that estimator silently."""
+        mask, _, _, _ = _setup()
+        g = _global(mask, resolution_factor=2.0)  # cell_moments=None
+
+        def estimator(m=mask, **extra):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return Global2PCF(NSIDE, mask=m, **_kw(resolution_factor=2.0, **extra))
+
+        smaller = mask.copy()
+        smaller[np.flatnonzero(mask)[0]] = False
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "g2.h5")
+            g.save_pairs(path)
+            with h5py.File(path, "r") as fp:
+                tile = int(fp.attrs["tile_nside"])
+                self.assertIn("treecode", fp)
+                self.assertNotIn("pair_phi", fp)  # no moment geometry
+            estimator().load_pairs(path)  # the matching estimator loads
+            cases = [
+                (dict(nbins=4), "nbins=5, this estimator has 4"),
+                (dict(tile_nside=2 * tile), f"tile_nside={tile}, this estimator"),
+                (dict(theta_max=470), "angular range differs"),
+                (dict(m=smaller), r"the mask \(row space\) differs"),
+                (dict(cell_moments="quad"), "carries no moment geometry"),
+            ]
+            for extra, message in cases:
+                with self.subTest(message=message):
+                    with self.assertRaisesRegex(ValueError, message):
+                        estimator(**extra).load_pairs(path)
+            forged = [
+                ("kind", "pixpoint.Global3PCF", "is not a Global2PCF pair file"),
+                (
+                    "format_version",
+                    FORMAT_VERSION + 1,
+                    f"format version {FORMAT_VERSION + 1}",
+                ),
+            ]
+            for attr, value, message in forged:
+                with self.subTest(message=message):
+                    other = os.path.join(tmp, f"{attr}.h5")
+                    shutil.copy(path, other)
+                    with h5py.File(other, "a") as fp:
+                        fp.attrs[attr] = value
+                    with self.assertRaisesRegex(ValueError, message):
+                        estimator().load_pairs(other)
 
 
 def _estimates(results):

@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use PixPoint in a publication, please cite it as below: until PixPoint has a software paper of its own, that is the SBi3PCF paper it was developed for. Please also name the PixPoint version you used and cite the papers behind the estimators you used (see the Citing page of the documentation)."
+message: "If you use PixPoint in a publication, please cite it as below: until PixPoint has a software paper of its own, that is the SBi3PCF paper it was developed for. Please also name the PixPoint version you used (its Zenodo DOI identifies it exactly) and cite the papers behind the estimators you used (see the Citing page of the documentation)."
 type: software
 title: "PixPoint: correlation functions of HEALPix maps on GPUs and CPUs"
 abstract: "PixPoint measures two-point, three-point, integrated three-point and one-point statistics of cosmological fields on HEALPix maps (cosmic shear, galaxy clustering, galaxy-galaxy lensing, convergence). The pixel pairs of a footprint are found once and reused for every map; measurements run on CPUs via Numba and on NVIDIA GPUs via CuPy."
@@ -12,6 +12,11 @@ version: 8.0.1
 date-released: "2026-11-03"
 repository-code: "https://github.com/D-Gebauer/PixPoint"
 url: "https://pixpoint.readthedocs.io"
+doi: "10.5281/zenodo.23915406"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23915406"
+    description: "Zenodo archive, all versions (resolves to the latest release; each version has its own DOI)"
 license: MIT
 keywords:
   - cosmology

@@ -29,6 +29,24 @@ cite the paper it was developed for, and name the PixPoint version you used:
 }
 ```
 
+Every release is archived on [Zenodo](https://doi.org/10.5281/zenodo.23915406),
+and each version has a DOI of its own. To identify the exact version you used,
+cite its DOI as well, from the version list of the Zenodo record (8.0.0:
+[10.5281/zenodo.23915407](https://doi.org/10.5281/zenodo.23915407)). The DOI
+[10.5281/zenodo.23915406](https://doi.org/10.5281/zenodo.23915406) stands for
+all versions and resolves to the latest one.
+
+```bibtex
+@software{PixPoint,
+  author    = {Gebauer, David},
+  title     = {{PixPoint: correlation functions of HEALPix maps on GPUs and CPUs}},
+  publisher = {Zenodo},
+  version   = {8.0.0},
+  doi       = {10.5281/zenodo.23915407},
+  url       = {https://doi.org/10.5281/zenodo.23915407}
+}
+```
+
 ## The statistics
 
 - **Integrated 3PCF**: Halder, Friedrich, Seitz & Varga 2021, *The integrated

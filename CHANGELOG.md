@@ -1,6 +1,6 @@
 # Changelog
 
-## 8.0.0 (unreleased)
+## 8.0.0 (2026-11-03)
 
 **Renamed: CosmoFuse is now PixPoint.** The distribution and the import are
 `pixpoint` (`pip install pixpoint`, `from pixpoint import Global2PCF`); there
@@ -25,10 +25,23 @@ gains CONTRIBUTING.md, a Contributor Covenant code of conduct, SECURITY.md,
 CITATION.cff, issue and pull-request templates; the README is rewritten
 around `Global2PCF`.
 
-**Breaking.** Stage A of the 8.0.0 plan (`RELEASE_8.0.0_GUIDE.md`): the
-estimators lose the two pieces of error estimation they had grown.
-CosmoFuse measures; covariances, jackknives and projections are the
-analysis's job.
+**Breaking.** The estimators lose the two pieces of error estimation they
+had grown. PixPoint measures; covariances, jackknives and projections are
+the analysis's job. Before and after:
+
+| 7.7.0 | 8.0.0 |
+|---|---|
+| `import CosmoFuse` | `import pixpoint` (no alias package) |
+| `TwoPointResult.tile_num[name]`, `.tile_weight`, `.n_tiles` | `num[name]`, `weight`: the sums over the footprint, `(ncomb, nbins)` |
+| `TwoPointResult.jackknife()` | removed: one `Global2PCF` per region, or a mask per region |
+| `result_a + result_b` concatenates the tiles | adds the sums |
+| `ThreePointResult.to_centroid()` | removed: convert the theory to the x-projection per triangle |
+| `Integrated3PCF.compute_sumofweights()`, `sumofweights=` on `gg` / `kk` / `kg` | removed: the kernels accumulate Σ w_i w_j in the same pass |
+| `Integrated3PCF.zeta_*()`, `calculate_all_zetas()` | `IntegratedResult.zetas()`, `pixpoint.correlation_helpers` |
+| pair-file `kind` `CosmoFuse.Global2PCF` / `CosmoFuse.Global3PCF` | `pixpoint.Global2PCF` / `pixpoint.Global3PCF` (old files still read) |
+| HDF5 attribute `cosmofuse_version` | `pixpoint_version` |
+| treecode cells carry Σ w and the weighted mean | plus the dipole and quadrupole (`cell_moments="quad"`); `cell_moments=None` is the 7.7.0 estimator |
+| — | `OnePoint`, `OnePointResult`, `OnePointWriter`, `ResultWriter`, `result_arrays` |
 
 - **`TwoPointResult` holds the sums, not the per-tile sums.** `num[name]` and
   `weight` are `(ncomb, nbins)` float64 arrays, Σ w_i w_j f_i f_j and Σ w_i w_j
@@ -62,7 +75,7 @@ analysis's job.
   the dipole and quadrupole of the weighted shear about its centroid, with
   the shear parallel-transported into the cell frame, and the pair kernels
   of the coarse bins correct the rotation phase of every child pair to
-  second order in the children's offsets (`CosmoFuse/moments.py` has the
+  second order in the children's offsets (`pixpoint/moments.py` has the
   expansion). The plain treecode suppressed ξ− by `⟨cos 4δφ⟩` (~3 % at
   k = 4, 10 % at k = 2) and leaked the parity-odd pair product as noise; with
   `"quad"` the mean ξ− error of the test field drops 6× at p/θ = 0.23 and
@@ -105,7 +118,7 @@ analysis's job.
   `M_g` has a constant filter and needs nothing. On the test field at
   p/θ_Q = 0.18 the per-cell residual goes 4–9 % → 0.5 % → 0.03 % for mono →
   dipole → quad and the patch sums from ±4 % to ±5e-4.
-- **One-point statistics: `OnePoint`** (`CosmoFuse/onepoint.py`, stage D).
+- **One-point statistics: `OnePoint`** (`pixpoint/onepoint.py`).
   A fourth estimator, pair-free: the distribution of an aperture field over
   the footprint. `OnePoint(nside, mask, scales, ...)` puts a centre on every
   `centre_nside` pixel (default: the level whose pixel is closest to θ/2)
@@ -142,9 +155,12 @@ analysis's job.
   Timing (A100, nside 1024, `benchmarks/onepoint/RESULTS.md`): `g` 12–13 ms
   per scale without `M_x`, 20–22 ms with it, `k` 7–10 ms, of which ~6 ms is the
   reduction floor and ~2 ms the Σw pass; `aperture_nside` with quad cells at nz = 4 saves memory
-  (4×/16×) but no time (the cell moments are 192 B per disc entry). Prices of
-  the windows on the PDF: pending.
-- **`ResultWriter`, `OnePointWriter`** (`CosmoFuse/result_writer.py`). The
+  (4×/16×) but no time (the cell moments are 192 B per disc entry). The
+  prices of the `aperture_nside` and pixel-top-hat windows on a PDF are not
+  measured in the library and are not the 0.07 σ measured for ζ (the tails
+  respond to the effective smoothing scale): measure them on the simulations
+  before use.
+- **`ResultWriter`, `OnePointWriter`** (`pixpoint/result_writer.py`). The
   streaming HDF5 writer is now a base every estimator shares: one row per
   map under one group, provenance in the file attributes, `constants/`
   written once, `flush_every` / `n_flushed` / `resume` / SWMR as before.
@@ -164,6 +180,32 @@ analysis's job.
   `tot_bins_dev`, `tot_bins_reduceat_dev` and `ntotpairs` existed for tests
   (`prepare()` and the tests write the `ComputeContext`); the getters stay.
   None of these had a caller in the package.
+
+**Unchanged.** The default construction measures the exact pixel-pair
+estimator: `resolution_factor=None`, `aperture_nside=None` and
+`pack_pairs=False` stay the defaults, and that configuration is bitwise
+4.20.0 (except `M_a`, corrected in 7.6.0, and `M_g`, the patch mean since
+7.6.2); `cell_moments=None` reproduces the 7.x treecode bitwise for every
+`resolution_factor`; `Global3PCF` is untouched by the new features (full
+resolution only). An edge-splitting pair search (`edge_slop`) that removed
+the treecode's binning window was implemented, measured and removed again
+before the release: at k = 4 it carried 1.5–2.6× (patches) to 4.4–10.8×
+(footprint) the pairs of the static list and ran about twice as slow per
+pair -- `three_by_two_pt` 9.8 → 56 ms per map on 69 patches at nside 1024,
+`Global2PCF` 0.12 → 2.7 s per map -- only ~1.5× cheaper than full
+resolution; the code and its measurements are in the history (`a2fe1a1`,
+`65f0ece`; removed in `16d3d69`). The binning window of the static list
+(pairs exchanged across bin edges, ±2 % at k = 4, alternating at the level
+seams) remains a deterministic property of the treecode estimator, identical
+for data and simulations.
+
+**Verified.** CPU suite (`pytest -m "not gpu"`, slow gates included) green;
+`pytest -m gpu` on an A100 80 GB (CuPy 14.2, CUDA 13.0): 11 passed, the two
+tests that need two GPUs skipped; `benchmarks/static_treecode/bitwise_check.py`
+(tiled vs per-row kernels, 48 DES Y3 patches at nside 512) bitwise on every
+output; `benchmarks/onepoint/gpu_gate.py` 80/80; `make lint`, `make docs`
+(warnings as errors) and `make build` (the wheel carries `cuda/*.cu`,
+`cuda/*.cuh` and `py.typed`) clean.
 
 ## 7.7.0 (2026-10-26)
 

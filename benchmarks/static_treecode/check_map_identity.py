@@ -6,14 +6,14 @@ from pixpoint.correlations import Integrated3PCF
 def fields_of(result, *names):
     return tuple(getattr(result, n) for n in names)
 
-SBI = "/e/ocean1/users/dgebauer/sbi"
+SBI = "/project/ocean1-seitz/users/dgebauer/sbi"
 nside = 512
-des_map = hp.ud_grade(hp.read_map("/home/moon/dgebauer/research/lfi/local/DESY3_Mask.fits"), nside)
-pair_file = f"{SBI}/pixpoint/Q110/2PCF_pairs_512_15_250_8.h5"
+des_map = hp.ud_grade(hp.read_map("/project/ocean1-seitz/users/dgebauer/research/lfi/local/DESY3_Mask.fits"), nside)
+pair_file = f"{SBI}/CosmoFuse/Q110/2PCF_pairs_512_15_250_8.h5"
 with h5py.File(pair_file, "r") as fp:
     attrs = dict(fp.attrs)
-phi = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_phi.dat")[:60]
-theta = np.loadtxt(f"{SBI}/pixpoint/Q110/patch_center_original_theta.dat")[:60]
+phi = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_phi.dat")[:60]
+theta = np.loadtxt(f"{SBI}/CosmoFuse/Q110/patch_center_original_theta.dat")[:60]
 geo = dict(nbins=int(attrs["nbins"]), theta_min=float(np.degrees(attrs["theta_min"]) * 60),
            theta_max=float(np.degrees(attrs["theta_max"]) * 60), patch_size=110., theta_Q=110., mask=des_map)
 cut = np.load(f"{SBI}/shear_maps/grid_baryonified/4BINS/gamma_0000.npy").reshape(-1, 4, 2, 369190)[0].astype(np.float32)

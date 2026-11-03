@@ -10,8 +10,8 @@ def fields_of(result, *names):
     return tuple(getattr(result, n) for n in names)
 
 
-SBI = "/e/ocean1/users/dgebauer/sbi"
-MASK = "/home/moon/dgebauer/research/lfi/local/DESY3_Mask.fits"
+SBI = "/project/ocean1-seitz/users/dgebauer/sbi"
+MASK = "/project/ocean1-seitz/users/dgebauer/research/lfi/local/DESY3_Mask.fits"
 
 
 def sync(corr):
@@ -24,8 +24,8 @@ def build(args):
     if hp.npix2nside(mask.size) != nside:
         mask = hp.ud_grade(mask.astype(np.float64), nside)
     mask = mask != 0
-    phi = np.loadtxt(f"{SBI}/pixpoint/Q{args.Q}/patch_center_original_phi.dat")
-    theta = np.loadtxt(f"{SBI}/pixpoint/Q{args.Q}/patch_center_original_theta.dat")
+    phi = np.loadtxt(f"{SBI}/CosmoFuse/Q{args.Q}/patch_center_original_phi.dat")
+    theta = np.loadtxt(f"{SBI}/CosmoFuse/Q{args.Q}/patch_center_original_theta.dat")
     edges = np.geomspace(args.theta_min, args.theta_max, args.nedges)
     edges = edges[edges < 2 * args.Q - 5]
     corr = Integrated3PCF(nside, phi, theta, nbins=len(edges) - 1, theta_min=edges[0], theta_max=edges[-1],

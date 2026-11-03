@@ -1,12 +1,13 @@
 # The PixPoint i3PCF estimator, and its static-treecode variant
 
 A self-contained definition of what `Integrated3PCF` measures, written so that
-it can be restated in a paper appendix. Version 7.0.0 (the footprint-wide
-estimators `Global2PCF` and `Global3PCF` are defined in the README and in
-`tests/threepoint_reference.py`). Companion measurements:
+it can be restated in a paper appendix. Version 8.0.0 (the footprint-wide
+estimators `Global2PCF` and `Global3PCF` are defined on their documentation
+pages and in `tests/threepoint_reference.py`). Companion measurements:
 `benchmarks/static_treecode/STAGE1_RESULTS.md` (2-point level dependence),
 `T10_RESULTS.md` (i3PCF level dependence), `BENCHMARK_TREECORR.md`
-(cross-check against TreeCorr).
+(cross-check against TreeCorr), `benchmarks/moments/RESULTS.md`
+(moment-carrying cells).
 
 Notation: pixels of a HEALPix map at resolution $N_{\rm side}$ are indexed by
 $p$, with weights $w_p$ (e.g. the summed shear weight or galaxy count of the
@@ -117,6 +118,45 @@ common rotation instead of per-pair ones. Parallel transport of the member
 shears to the centroid is not applied; it was measured to be $\le 10^{-4}$ even
 for patches at $\mathrm{dec} = -62°$.
 
+**Moment-carrying cells (8.0.0, `cell_moments`).** Given the bin, the only
+approximation in a coarse pair sum of $\xi_-$ is the rotation phase: the child
+pair $(p, q)$ has position angles that differ from the centroid pair's by
+$\delta\phi_{pq}$, so its product carries $e^{2i\delta\phi_{pq}}$ relative to
+the cell product (both ends turn by the same angle to first order, hence
+$4\,\delta\phi$ for $\xi_-$ and $2\,\delta\phi$ for $\gamma_{\rm t}$, where
+only the source end has a phase). Expanding that factor to second order in the
+children's offsets $\delta r_p$ from the centroid (gnomonic, in the cell's
+east/north frame) turns the cell pair into a contraction of per-cell moments of
+the weighted shear,
+
+$$ M_I = \sum_{p \in I} w_p \tilde\gamma_p, \qquad D_I = \sum_{p \in I} w_p \tilde\gamma_p\, \delta r_p, \qquad Q_I = \sum_{p \in I} w_p \tilde\gamma_p\, \delta r_p \delta r_p^{\mathsf T}, $$
+
+with $\tilde\gamma_p$ the child shear parallel-transported into the cell frame
+(exact geometry, from the binary mask like the centroids). With $d$ the pair
+separation, $\hat p$, $\hat q$ the unit vectors perpendicular and parallel to
+the connecting geodesic at each end (the $J$ end transported along it),
+$D_p = \hat p \cdot D$, $Q_{pp} = \hat p^{\mathsf T} Q \hat p$ and so on, and
+$S$ the sign of the rotation convention ($S = -1$ for PixPoint's
+$e^{+2i\phi}$), the $\xi_-$ pair term is $\mathrm{Re}\,[F\, e^{-2iS(\phi_I + \phi_J)}]$ with
+
+$$ F = M_I M_J - \frac{4iS}{d}\,(M_I D_{p,J} - D_{p,I} M_J) - \frac{8}{d^2}\,(M_I Q_{pp,J} - 2 D_{p,I} D_{p,J} + Q_{pp,I} M_J) + \frac{4iS}{d^2}\,(M_I Q_{qp,J} - D_{q,J} D_{p,I} - D_{q,I} D_{p,J} + Q_{qp,I} M_J). $$
+
+$\gamma_{\rm t}$ has the same expansion with $4 \to 2$ and the lens cell's real
+moments of $w\delta$; $\xi_+$ uses the transported $M$ only (its phase cancels);
+$\xi_{\rm g}$ has no phase and no moments. `cell_moments="dipole"` keeps the
+first-order term, `"quad"` (the default) both; `None` is the plain cell of §3.
+The per-pair residual against the exact child sum scales as $4\delta\phi$,
+$8\delta\phi^2$ and $(4\delta\phi)^3/6$ for the three choices (the dipole alone
+removes the scatter but flips the sign of the mean bias, which only the
+quadrupole removes). With `aperture_nside` the aperture sums of §1 expand the
+same way about the coarse pixel centre, with the tangential phase and the
+filter's derivatives $Q'$, $Q''$ at the cell (the patch-mean $M_{\rm g}$ has a
+constant filter and needs nothing); full-resolution apertures have
+$D = Q = 0$. The moments remove the *phase* window of the coarse cells; the
+*binning* window (pairs whose fine separation falls in a neighbouring bin)
+remains, see §4. `pixpoint.moments` holds the derivation and a NumPy
+reference.
+
 The aperture statistics of §1 are unaffected by $k$; they have their own
 optional level (`aperture_nside`).
 
@@ -153,6 +193,21 @@ simulation-based inference **as long as the same $k$ is used throughout**.
 Coarse and fine data vectors differ at the noise level, not only by the
 few-per-cent signal suppression, and must never be mixed between data,
 simulations and covariance.
+
+**With moment-carrying cells** (`cell_moments="quad"`, the 8.0.0 default;
+the table above is the plain cell) the phase part of the suppression goes:
+on the test field at $k = 4$ the mean $\xi_-$ error drops from −2…−5 % to
+$\le 0.3$ % and the information retained under DES-like shape noise from
+0.97–0.99 to $\ge 0.9999$; $\gamma_{\rm t}$ follows with half the phase,
+$\xi_+$ moves at the $10^{-5}$ level (transported frame). At the i3PCF level
+(same T10 setup) the $\zeta_{a,-}$ price of $k = 2.9$ falls from 0.27 to
+0.20 $\sigma_{\rm patch}$ and that of $k = 1.5$ from 0.81 to 0.39; $k = 2$
+with quad (0.39) does not pass the criterion $k = 2.9$ passes, so $k \approx 3$
+remains the recommendation. What is left is the binning window, pairs
+exchanged across bin edges (±2 % at $k = 4$, alternating in sign at the level
+seams), which $\zeta_{a,+}$ already showed and which the moments cannot touch.
+It is deterministic and shared by data and simulations; a smooth data vector,
+or one comparable with an exact code, means full resolution.
 
 
 ## 5. One-point statistics (`OnePoint`, 8.0.0)

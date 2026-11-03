@@ -35,8 +35,8 @@ def fields_of(result, *names):
     return tuple(getattr(result, n) for n in names)
 
 
-SBI = "/e/ocean1/users/dgebauer/sbi"
-MASK = "/home/moon/dgebauer/research/lfi/local/DESY3_Mask.fits"
+SBI = "/project/ocean1-seitz/users/dgebauer/sbi"
+MASK = "/project/ocean1-seitz/users/dgebauer/research/lfi/local/DESY3_Mask.fits"
 DATA = os.path.expanduser("~/research/CosmoFuse-treecode-data")
 G = {}  # globals shared with the TreeCorr worker processes (fork)
 
@@ -210,8 +210,8 @@ def main():
         return
 
     Q = 90
-    phi_c = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_phi.dat")
-    theta_c = np.loadtxt(f"{SBI}/pixpoint/Q{Q}/patch_center_original_theta.dat")
+    phi_c = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_phi.dat")
+    theta_c = np.loadtxt(f"{SBI}/CosmoFuse/Q{Q}/patch_center_original_theta.dat")
     npatch = min(args.npatch or len(phi_c), len(phi_c))
     nside = int(args.scenario)
     m = hp.read_map(MASK)

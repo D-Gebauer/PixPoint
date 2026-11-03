@@ -44,7 +44,7 @@ import scipy.sparse as sp
 P = "/project/ocean1-seitz/users/dgebauer"
 DEFAULT_MASK = f"{P}/research/CosmoFuse-treecode-data/DESY3_Mask.fits"
 DEFAULT_KAPPA = f"{P}/sbi/convergence_maps/fiducial/cosmo_fiducial/nzmap_0000.npy"
-DEFAULT_CENTRES = f"{P}/sbi/pixpoint/Q90/patch_center_original_{{}}.dat"
+DEFAULT_CENTRES = f"{P}/sbi/CosmoFuse/Q90/patch_center_original_{{}}.dat"
 
 VARIANTS = {"mono": 0, "dipole": 1, "quad": 2}
 NM_OF = {0: 1, 1: 3, 2: 6}

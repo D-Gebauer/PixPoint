@@ -8,6 +8,8 @@ authors:
     given-names: David
     email: git@gebauer.ai
     affiliation: "Ludwig-Maximilians-Universität München, University Observatory"
+version: 8.0.0
+date-released: "2026-11-03"
 repository-code: "https://github.com/D-Gebauer/PixPoint"
 url: "https://pixpoint.readthedocs.io"
 license: MIT

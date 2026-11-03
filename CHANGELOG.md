@@ -1,5 +1,19 @@
 # Changelog
 
+## 8.0.1 (2026-11-03)
+
+**Fix: the GPU kernels compile with CuPy 13 again.** Two comment lines added
+with the moment-carrying cells in 8.0.0 (`cuda/pair_tiles.cuh`,
+`cuda/aperture_tomo.cu`) contained a non-ASCII character. CuPy 13 encodes a
+kernel source as ASCII when it is compiled with `name_expressions`, which
+PixPoint always does, so with CuPy 13 every kernel built from those files
+failed to compile: the packed ξ± kernel and the aperture-mass kernels, i.e.
+`Integrated3PCF.gg` and `OnePoint` on the GPU. The packed path then raised a
+misleading "packed ξ± kernel is unavailable" error. CuPy 14 was not affected,
+and neither was any result: a measurement either failed or was correct. The
+sources are ASCII again, and `tests/test_cuda_sources.py` keeps every
+`cuda/*.cu` and `*.cuh` file ASCII.
+
 ## 8.0.0 (2026-11-03)
 
 **Renamed: CosmoFuse is now PixPoint.** The distribution and the import are

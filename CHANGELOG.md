@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Citing: the Zenodo DOI is the one for all versions,
+  `10.5281/zenodo.23915406` (`docs/citing.md`, `CITATION.cff`, the README
+  badge); the per-version DOI is no longer quoted.
+
 ## 8.0.1 (2026-11-03)
 
 **Fix: the GPU kernels compile with CuPy 13 again.** Two comment lines added

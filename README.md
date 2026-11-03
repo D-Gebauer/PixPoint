@@ -97,8 +97,12 @@ still read.
 
 ## Citing
 
-Please cite the software (see `CITATION.cff` or GitHub's "Cite this
-repository") and the papers behind the estimators you use, listed on the
+Until PixPoint has a software paper of its own, please cite the paper it was
+developed for, Gebauer et al. 2026, *SBi3PCF: simulation-based inference with
+the integrated 3PCF*, JCAP 06 (2026) 036
+([arXiv:2510.13805](https://arxiv.org/abs/2510.13805)), and name the PixPoint
+version you used. Please also cite the papers behind the estimators you use.
+The BibTeX entry and those papers are on the
 [Citing](https://pixpoint.readthedocs.io/en/latest/citing.html) page.
 
 ## Contributing

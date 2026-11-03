@@ -1,9 +1,33 @@
 # Citing
 
-If PixPoint contributes to a publication, please cite the software (a Zenodo
-DOI will be minted with the 8.0.0 release; until then cite the repository,
-`https://github.com/D-Gebauer/PixPoint`, with the version you used) and the
-papers behind the estimators you used.
+If PixPoint contributes to a publication, please cite it and the papers behind
+the estimators you used.
+
+## The software
+
+PixPoint does not have a software paper of its own yet. Until it does, please
+cite the paper it was developed for, and name the PixPoint version you used:
+
+- Gebauer, Halder, Seitz & Anbajagane 2026, *SBi3PCF: simulation-based
+  inference with the integrated 3PCF*, JCAP 06 (2026) 036,
+  [doi:10.1088/1475-7516/2026/06/036](https://doi.org/10.1088/1475-7516/2026/06/036)
+  ([arXiv:2510.13805](https://arxiv.org/abs/2510.13805)).
+
+```bibtex
+@article{Gebauer2026,
+  author        = {Gebauer, David and Halder, Anik and Seitz, Stella and Anbajagane, Dhayaa},
+  title         = {{SBi3PCF: simulation-based inference with the integrated 3PCF}},
+  journal       = {Journal of Cosmology and Astroparticle Physics},
+  year          = {2026},
+  volume        = {2026},
+  number        = {06},
+  pages         = {036},
+  doi           = {10.1088/1475-7516/2026/06/036},
+  eprint        = {2510.13805},
+  archivePrefix = {arXiv},
+  primaryClass  = {astro-ph.CO}
+}
+```
 
 ## The statistics
 
@@ -48,5 +72,5 @@ papers behind the estimators you used.
   ([Numba](https://numba.pydata.org/numba-doc/latest/user/faq.html#how-do-i-reference-cite-acknowledge-numba-in-other-work),
   [CuPy](https://cupy.dev/)).
 
-The repository's `CITATION.cff` holds the software citation in a
-machine-readable form (GitHub's "Cite this repository" button).
+The repository's `CITATION.cff` holds the same citation in a machine-readable
+form (GitHub's "Cite this repository" button).

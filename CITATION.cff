@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use PixPoint in a publication, please cite it as below and the papers behind the estimators you used (see the Citing page of the documentation)."
+message: "If you use PixPoint in a publication, please cite it as below: until PixPoint has a software paper of its own, that is the SBi3PCF paper it was developed for. Please also name the PixPoint version you used and cite the papers behind the estimators you used (see the Citing page of the documentation)."
 type: software
 title: "PixPoint: correlation functions of HEALPix maps on GPUs and CPUs"
 abstract: "PixPoint measures two-point, three-point, integrated three-point and one-point statistics of cosmological fields on HEALPix maps (cosmic shear, galaxy clustering, galaxy-galaxy lensing, convergence). The pixel pairs of a footprint are found once and reused for every map; measurements run on CPUs via Numba and on NVIDIA GPUs via CuPy."
@@ -7,7 +7,7 @@ authors:
   - family-names: Gebauer
     given-names: David
     email: git@gebauer.ai
-    affiliation: "Ludwig-Maximilians-Universität München, University Observatory"
+    affiliation: "Bielefeld University"
 version: 8.0.0
 date-released: "2026-11-03"
 repository-code: "https://github.com/D-Gebauer/PixPoint"
@@ -21,3 +21,26 @@ keywords:
   - three-point functions
   - HEALPix
   - GPU
+preferred-citation:
+  type: article
+  title: "SBi3PCF: simulation-based inference with the integrated 3PCF"
+  authors:
+    - family-names: Gebauer
+      given-names: David
+    - family-names: Halder
+      given-names: Anik
+    - family-names: Seitz
+      given-names: Stella
+    - family-names: Anbajagane
+      given-names: Dhayaa
+  journal: "Journal of Cosmology and Astroparticle Physics"
+  year: 2026
+  month: 6
+  volume: 2026
+  issue: "06"
+  start: "036"
+  doi: "10.1088/1475-7516/2026/06/036"
+  identifiers:
+    - type: other
+      value: "arXiv:2510.13805"
+      description: "arXiv preprint"

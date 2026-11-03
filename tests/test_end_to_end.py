@@ -9,7 +9,7 @@ from pixpoint import Q_crittenden, U_crittenden, U_tophat
 from pixpoint.correlations import Integrated3PCF
 from pixpoint.utils import pixel2RaDec
 
-from ._results import fields_of
+from ._results import ZETA_DEFINITIONS, fields_of, zeta_reference
 
 
 class TestEndToEnd(unittest.TestCase):
@@ -457,6 +457,45 @@ class TestEndToEnd(unittest.TestCase):
             self.corr._m_g_single(np.full(npix, 0.25), self.w2)
         )
         np.testing.assert_allclose(m_g, 0.25, rtol=1e-12)
+
+    def test_three_by_two_pt_zetas_has_all_eight_variants(self):
+        """A 3x2pt measurement forms every i3PCF, in the documented row
+        layouts.  One lens bin and two source bins, so no layout is
+        ambiguous (see ``calculate_all_zetas``)."""
+        self.corr.preprocess()
+        lens = self.density_maps[:1]
+        res = self.corr.three_by_two_pt(
+            self.shear_maps,
+            lens,
+            weights=(np.ones((2, lens.shape[1])), np.ones((1, lens.shape[1]))),
+            return_device=False,
+        )
+        zetas = res.zetas()
+        self.assertEqual(set(zetas), set(ZETA_DEFINITIONS))
+        n_triangle = {"M_a": len(Integrated3PCF.zeta_triplets(2)), "M_g": 1}
+        n_comb = {
+            "xi_p": len(res.gg_combinations),
+            "xi_m": len(res.gg_combinations),
+            "xi_g": len(res.kk_combinations),
+            "xi_t": len(res.kg_combinations),
+        }
+        n_central = {"M_a": 2, "M_g": 1}
+        for name, (central, annulus, triangle) in ZETA_DEFINITIONS.items():
+            with self.subTest(estimator=name):
+                rows = (
+                    n_triangle[central]
+                    if triangle
+                    else len(
+                        Integrated3PCF.zeta_cross_triplets(
+                            n_central[central], n_comb[annulus]
+                        )
+                    )
+                )
+                self.assertEqual(zetas[name].shape, (rows, self.nbins))
+                self.assertTrue(np.all(np.isfinite(zetas[name])))
+                np.testing.assert_allclose(
+                    zetas[name], zeta_reference(res, name), rtol=1e-10, atol=1e-30
+                )
 
     def test_tophat_filter_m_g_is_the_cap_mean(self):
         """Unit weights and a constant field: the U_tophat filter gives

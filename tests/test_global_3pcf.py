@@ -11,9 +11,12 @@ G5  opening-angle binning: the Fourier coefficients and the convergence of
 G6  the GPU launch wrapper + numpy twin of gpu_3pcf_multipoles == CPU.
 """
 
+import os
+import tempfile
 import unittest
 import warnings
 
+import h5py
 import healpy as hp
 import numpy as np
 import pytest
@@ -383,3 +386,97 @@ class TestRealGPU(unittest.TestCase):
                     for label in a.num:
                         self.assertLess(_rel(b.num[label], a.num[label]), tol)
                         self.assertLess(_rel(b.norm[label], a.norm[label]), tol)
+
+
+class TestInputs(unittest.TestCase):
+    """Defaults and input checks of the constructor and of measure()."""
+
+    def _ggg(self, est, g, w):
+        return est.measure({"g": (g, w, 2)}, [Component("x", ("g", "g", "g"))])
+
+    def test_full_sky_default_mask_and_tiles(self):
+        nside = 8
+        npix = hp.nside2npix(nside)
+        rng = np.random.default_rng(5)
+        g = rng.normal(size=(1, 2, npix))
+        w = rng.uniform(0.5, 1.5, size=(1, npix))
+        kw = dict(nbins=3, theta_min=240, theta_max=900, n_max=2, device="cpu")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            default = Global3PCF(nside, **kw)
+        # The documented rule: the smallest tiles whose side is still at
+        # least theta_max, i.e. one level finer would be too small.
+        theta_max = np.radians(900 / 60)
+        tile = default.tile_nside
+        self.assertGreaterEqual(hp.nside2resol(tile), theta_max)
+        self.assertTrue(tile * 2 > nside or hp.nside2resol(tile * 2) < theta_max)
+        np.testing.assert_array_equal(default.map_inds, np.arange(npix))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            explicit = Global3PCF(
+                nside, mask=np.ones(npix, bool), tile_nside=tile, **kw
+            )
+        default.preprocess()
+        explicit.preprocess()
+        a, b = self._ggg(default, g, w), self._ggg(explicit, g, w)
+        np.testing.assert_array_equal(a.num["x"], b.num["x"])
+        np.testing.assert_array_equal(a.norm["x"], b.norm["x"])
+        self.assertTrue(np.any(a.norm["x"] != 0))
+
+    def test_constructor_validation(self):
+        npix = hp.nside2npix(NSIDE)
+        base = dict(nbins=3, theta_min=240, theta_max=900, tile_nside=2, device="cpu")
+        cases = [
+            (dict(nbins=0), "nbins must be positive"),
+            (dict(theta_min=900, theta_max=240), "theta_min must be less"),
+            (dict(n_max=-1), "n_max must be >= 0"),
+            (dict(accumulation_precision="float32"), "accumulation_precision"),
+            (dict(pair_search_precision="float16"), "pair_search_precision"),
+            (dict(mask=np.ones(npix - 1, bool)), "mask length must match nside"),
+        ]
+        for change, message in cases:
+            with self.subTest(**{k: str(v)[:20] for k, v in change.items()}):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    with self.assertRaisesRegex(ValueError, message):
+                        Global3PCF(NSIDE, **{**base, **change})
+
+    def test_measure_input_validation(self):
+        mask, g, w, d = _setup()
+        est = _estimator(mask)
+        x = [Component("x", ("g", "g", "g"))]
+        cases = [
+            ({"g": (g, w, 1)}, x, "spin must be 0 or 2"),
+            ({"g": (g, w[:1], 2)}, x, "weights of 'g' must be"),
+            ({"g": (g[:, 0], w, 2)}, x, "spin-2 field 'g' must be"),
+            ({"d": (g, w, 0)}, [Component("x", ("d", "d", "d"))], "spin-0 field 'd'"),
+            ({"g": (g[..., :-1], w, 2)}, x, "map arrays must have npix"),
+            ({"g": (g, w, 2)}, [Component("x", ("g", "h", "g"))], "unknown field 'h'"),
+        ]
+        for fields, components, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    est.measure(fields, components)
+
+    def test_pair_file_checks(self):
+        mask, _g, _w, _d = _setup()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            est = Global3PCF(
+                NSIDE,
+                mask=mask,
+                nbins=3,
+                theta_min=240,
+                theta_max=900,
+                tile_nside=2,
+                device="cpu",
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "no pair geometry"):
+                est.save_pairs(os.path.join(tmp, "none.h5"))
+            path = os.path.join(tmp, "two_point.h5")
+            with h5py.File(path, "w") as fp:
+                fp.attrs["kind"] = "pixpoint.Global2PCF"
+                fp.attrs["format_version"] = 1
+            with self.assertRaisesRegex(ValueError, "is not a Global3PCF pair file"):
+                est.load_pairs(path)

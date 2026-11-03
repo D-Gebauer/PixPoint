@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/D-Gebauer/PixPoint/actions/workflows/ci.yml/badge.svg)](https://github.com/D-Gebauer/PixPoint/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/D-Gebauer/PixPoint/graph/badge.svg?token=F4JC08UEJP)](https://codecov.io/github/D-Gebauer/PixPoint)
-[![Documentation](https://readthedocs.org/projects/pixpoint/badge/?version=latest)](https://pixpoint.readthedocs.io)
+[![Documentation](https://img.shields.io/readthedocs/pixpoint/latest?logo=readthedocs&logoColor=white)](https://pixpoint.readthedocs.io)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Correlation functions of HEALPix maps, fast.**

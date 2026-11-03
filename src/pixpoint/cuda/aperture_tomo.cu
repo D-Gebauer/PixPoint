@@ -269,7 +269,7 @@ __global__ void gpu_aperture_density_tomo_fused(
 
 
 /*
- * ── Moment-carrying aperture cells (cell_moments with aperture_nside) ────
+ * -- Moment-carrying aperture cells (cell_moments with aperture_nside) ----
  *
  * A disc cell c = q_inds[idx] - n_active carries, per tomographic bin, the
  * normalised moments mom[((c*NZ + z)*NM + k)*2 + {re, im}] of its children

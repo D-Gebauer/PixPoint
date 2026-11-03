@@ -508,7 +508,7 @@ __device__ __forceinline__ void tile_multi(
 
 
 /*
- * ── Moment-carrying cells (cell_moments = "dipole" | "quad") ─────────────
+ * -- Moment-carrying cells (cell_moments = "dipole" | "quad") -------------
  *
  * The coarse bins' pairs are cell pairs; besides the (transported) mean and
  * the weight sum in the row buffers, every cell row c = row - n_active

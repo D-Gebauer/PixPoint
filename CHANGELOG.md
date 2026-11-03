@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- PyPI classifier `Development Status :: 5 - Production/Stable` (was
-  `4 - Beta`, left over from 2025).
-- Citing: the Zenodo DOI (`CITATION.cff`, `docs/citing.md`), one per release
-  plus `10.5281/zenodo.23915406` for all versions.
-
 ## 8.0.1 (2026-11-03)
 
 **Fix: the GPU kernels compile with CuPy 13 again.** Two comment lines added
@@ -20,6 +13,19 @@ misleading "packed ξ± kernel is unavailable" error. CuPy 14 was not affected,
 and neither was any result: a measurement either failed or was correct. The
 sources are ASCII again, and `tests/test_cuda_sources.py` keeps every
 `cuda/*.cu` and `*.cuh` file ASCII.
+
+**Also in this release.**
+
+- Tests for every refusal of `load_pairs` (a pair file from another
+  estimator, binning, angular range, mask, format or treecode level), so a
+  broken check cannot measure the wrong estimator silently.
+- Removed the internal, unused `PairFinder.get_pairs_patch` (per-bin split)
+  and its `PairGeometry` wrapper; every pair search goes through
+  `get_pairs_patch_flat`. Neither was exported or documented.
+- PyPI classifier `Development Status :: 5 - Production/Stable` (was
+  `4 - Beta`, left over from 2025).
+- Citing: the Zenodo DOI (`CITATION.cff`, `docs/citing.md`), one per release
+  plus `10.5281/zenodo.23915406` for all versions.
 
 ## 8.0.0 (2026-11-03)
 

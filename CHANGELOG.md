@@ -1,6 +1,60 @@
 # Changelog
 
-## Unreleased
+## 8.1.0 (2026-11-04)
+
+**`Global2PCF` sizes its tiles for packed pairs before searching.** Packed
+pairs (`pack_pairs=True`, `pack_host_pairs=True`) index their map rows with
+16-bit indices local to the row block of their (tile, resolution level), so a
+block may hold at most 65536 rows. The default tiles (`tile_nside=None`: the
+smallest tiles whose side is still >= `theta_max`) ignored that, and at
+`nside=2048` with bins up to 250′ a full tile at the finest treecode level
+holds 65536 core pixels plus its halo (70363 rows on DES Y3): the pair search
+ran to the end and the packing step then raised. Now:
+
+- Before any pair search, `Global2PCF` bounds every packed row block from the
+  footprint alone
+  (`pixpoint.global_geometry.packed_block_rows_bound`; 1–6 s per tiling at
+  nside 2048 with the treecode, 14 s at full resolution, on 32 cores): the
+  whole core of the tile at that level, plus the halo
+  elements that can pair with it -- in a reached tile, with a higher id than
+  the core's lowest (the tile that owns a pair is the one of its lower id),
+  and within the search radius of the tile's edge. The bound is never below
+  the real block (gated per block against the packed payload): on DES Y3 at
+  nside 2048, k = 2.9 and `tile_nside` 8 it is 72624 rows for a real largest
+  block of 70363 (+3 %).
+- With `tile_nside=None` the tiles are halved in side until the bound fits
+  (at most to the coarsest treecode level). A configuration whose bound fits
+  keeps exactly the tiles it had, so its results and pair files do not change;
+  only one whose largest block is within the bound's margin of the limit (or
+  above it, which used to fail) gets finer tiles. The estimate
+  does not depend on the tiling (tile invariance is a gate). On DES Y3 with
+  bins up to 250′ the choice is `tile_nside` 8 at nside 512 and 1024
+  (unchanged), 16 at nside 2048 with k = 2.9, and 64 at nside 2048 at full
+  resolution (whose halo of 250′ alone nearly fills a block).
+- An explicit `tile_nside` is kept; if the bound exceeds the limit a warning
+  names a `tile_nside` that fits (or says to use `pack_pairs=False`). The bound
+  is conservative, so the exact check of the packing step still decides.
+- `Global2PCF.packed_block_rows_bound`: the bound the choice was made with
+  (`None` without packing). It is refined only as far as the decision needs,
+  so a tiling that fits easily reports a coarse value (63188 for a real
+  largest block of 19477 at nside 1024); for the tight bound of every block
+  call `packed_block_rows_bound` without `limit`.
+
+Cost of finer tiles (A100, DES Y3, nside 1024, 20 bins 2.5′–250′, 4 bins,
+float32 maps, float64 accumulation, `pack_host_pairs`,
+`benchmarks/global/bench_tiles.py`, k = 2.9, 1.45 × 10⁸ pairs): `tile_nside`
+8 → 16 makes `find_pairs` 2.6× slower (52 → 138 s: every tile searches its own
+halo) and the measurements 10–18 % faster (`gg` 20.1 → 17.5 ms, `kk` 6.3 →
+5.2 ms, `kg` 34.2 → 30.9 ms per map; smaller row blocks, more local gathers);
+`prepare` and device memory barely change. So the automatic choice refines
+only when packing needs it (`benchmarks/global/RESULTS.md`).
+
+A pair file saved by 8.0.x is loaded only into an estimator with the same
+tiles; if the new check would choose finer tiles for it, pass the file's
+`tile_nside` explicitly. `Global3PCF` does not pack pairs and is unchanged;
+`Integrated3PCF` patches are part of the estimator and are never resized.
+
+**Also in this release.**
 
 - Citing: the Zenodo DOI is the one for all versions,
   `10.5281/zenodo.23915406` (`docs/citing.md`, `CITATION.cff`, the README

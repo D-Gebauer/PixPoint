@@ -40,6 +40,18 @@ GPU with room for the maps. Three knobs shrink it:
   (three times more pairs per card). The rotation angles are then quantised
   to 16 bits, which moves every estimate by about 1e-5 of its statistical
   error and does not bias it; the host arrays and the pair file stay exact.
+  Packed pairs address their two map rows with 16-bit indices local to a row
+  block (one per tile, or patch, and resolution level), so a block holds at
+  most 65536 rows. `Global2PCF` checks this before searching for pairs, from
+  a conservative bound computed from the footprint alone (seconds), and
+  when it chooses the tiles itself (`tile_nside=None`) it shrinks them until
+  every block fits: at `nside=2048` with bins up to 250′ that means
+  `tile_nside` 16 instead of 8. The estimate does not depend on the tiling.
+  The bound the choice was made with is `packed_block_rows_bound` (coarse
+  when the blocks fit easily); an explicit
+  `tile_nside` that may not fit gives a warning naming one that does.
+  `Integrated3PCF` patches are part of the estimator and are never resized:
+  a patch too large to pack raises when the pairs are packed.
 - `pack_host_pairs=True` packs in RAM and in the file as well (the file is
   then no longer exact; keep an exact copy if you may want to switch back).
 - `resolution_factor` (the [treecode](treecode.md)) reduces the number of

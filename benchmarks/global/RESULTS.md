@@ -94,3 +94,38 @@ warp-specialised staging, not tried.
 
 All together: `ggg()` 2.011 → 1.558 s, `kgg()` 2.668 → 2.429 s (no twins
 there), max rel diff 5.7e-15 against 7.2.1.
+
+## Update 2026-11-04 (8.1.0): tiles sized for packed pairs
+
+`bench_tiles.py` on usm-cl-seitz2 (A100 80 GB PCIe, el9 SLURM, 64 cores),
+DES Y3 (`ud_grade >= 0.5`), 20 log bins 2.5–250′, k = 2.9 with quad moments,
+4 source bins, random maps, float32 maps + float64 accumulation,
+`pack_pairs` + `pack_host_pairs`, device-resident inputs, median of 5:
+
+| nside 1024, k = 2.9 | tile_nside 8 (136 tiles) | tile_nside 16 (455 tiles) |
+|---|---|---|
+| construction (incl. the packed-block check) | 0.7 s | 0.7 s |
+| `find_pairs` | 52.5 s | 137.7 s (2.6×) |
+| `prepare` | 3.3 s | 3.5 s |
+| `gg()` | 20.1 ms | 17.5 ms (−13 %) |
+| `kk()` | 6.3 ms | 5.2 ms (−18 %) |
+| `kg()` | 34.2 ms | 30.9 ms (−10 %) |
+| device pool | 2.03 GB | 2.10 GB |
+| largest packed row block | 19477 | 5830 |
+
+1.45 × 10⁸ pairs in both (the tiling only regroups them). Finer tiles cost
+one-off pair finding (every tile searches its own halo, and at tile_nside 16
+the halo of 250′ is larger than the tile) and are 10–18 % faster per map
+(smaller row blocks, more local gathers). The automatic choice keeps 8 here
+(`tile_nside=None` gave the tile-8 numbers); it refines only when packing
+needs it, which on this footprint happens first at nside 2048 (k = 2.9:
+largest block 70363 rows at tile_nside 8, bound 72624; fits at 16).
+
+Cost of the check itself (`packed_block_rows_bound` with the packing limit,
+el9 CPU node, 32 cores, nside 2048): 1.0 s (tile 8, stops at the first
+overflowing block) + 3.5 s (tile 16) with k = 2.9; 16 s for 8 → 64 at full
+resolution, where the 250′ halo alone nearly fills a block. Without the
+limit (every block refined, as the tests do): 12–28 s with k = 2.9.
+
+The full-resolution nside-1024 run of the same job was killed by the host
+memory limit (256 GB) during the pair search and is not reported.

@@ -32,7 +32,7 @@ returns the *full* angles (needed for odd multipoles) at both ends.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple, cast
+from typing import Any, Dict, Optional, Sequence, Tuple, cast
 
 import healpy as hp
 import numpy as np
@@ -161,6 +161,152 @@ def search_slack(radius: float, precision: Any) -> float:
     cos_r = np.cos(radius)
     beyond = float(np.arccos(max(cos_r - 4.0 * eps, -1.0))) - radius
     return max(beyond, 0.0) + 16.0 * eps
+
+
+# ── packed row blocks ─────────────────────────────────────────────────────
+
+
+# edge queries larger than this use every core (cKDTree workers=-1)
+_PARALLEL_QUERY = 100_000
+
+
+def _tile_boundary_vec(tile_nside: int, tile_id: int, nside_f: int) -> np.ndarray:
+    """(n, 3) centres of the pixels at ``nside_f`` along the edge of tile
+    ``tile_id`` (NESTED, ``tile_nside``): the outermost rows and columns of
+    the tile in the face coordinates of its base pixel."""
+    x, y, f = hp.pix2xyf(tile_nside, int(tile_id), nest=True)
+    s = int(nside_f) // int(tile_nside)
+    r = np.arange(s, dtype=np.int64)
+    x0, y0 = int(x) * s, int(y) * s
+    xs = np.concatenate((x0 + r, x0 + r, np.full(s, x0), np.full(s, x0 + s - 1)))
+    ys = np.concatenate((np.full(s, y0), np.full(s, y0 + s - 1), y0 + r, y0 + r))
+    pix = hp.xyf2pix(nside_f, xs, ys, np.full(xs.size, int(f)), nest=True)
+    return np.asarray(hp.pix2vec(nside_f, pix, nest=True), dtype=np.float64).T
+
+
+def packed_block_rows_bound(
+    tiles: TileSet,
+    row_pix: np.ndarray,
+    groups: Sequence[Tuple[int, int, int]],
+    binedges: np.ndarray,
+    precision: Any = "float64",
+    limit: Optional[int] = None,
+) -> np.ndarray:
+    """Upper bound on the rows of every packed (tile, level) row block of the
+    unordered footprint pair search (:func:`unique_pairs` per tile and level,
+    packed by :func:`pixpoint.packing.pack_patch`), from the footprint alone:
+    no pair search, a few seconds at nside 2048.
+
+    The block of tile ``t`` and level ``g`` = ``(nside_g, b0, b1)`` holds the
+    distinct ids of the pairs ``(a, b)`` that tile owns in the bins of that
+    level: ``a`` in the core, ``a < b``, separation below ``binedges[b1]``
+    (plus the acceptance slack of the search at ``precision``).  It is
+    bounded by
+
+    * the whole core (every core element at that level), plus
+    * the halo elements that can be such a ``b``: in a tile the search
+      reaches (:meth:`TileSet.reach`), with an id above the smallest core id
+      (pixel level: RING ids; treecode cells are numbered in tile order, so
+      only tiles after ``t``), and within the search radius of the tile
+      itself -- tested against the centres of the tile's edge pixels at four
+      times the level's resolution.  The geodesic from a core element to a
+      partner outside leaves the tile through that edge, so the margin is
+      the edge pixels' radius, plus for treecode cells twice the cell radius
+      (cells are tested at their pixel centres, the search uses centroids).
+
+    The bound is conservative, never below the packed block.
+
+    Args:
+        tiles: the tiling of the row space.
+        row_pix: (n_rows,) RING pixel of every row (ascending).
+        groups: resolution levels as ``(nside, first_bin, stop_bin)``
+            (:func:`pixpoint.treecode.level_groups`).
+        binedges: (nbins + 1,) bin edges in radians.
+        precision: the pair-search precision.
+        limit: when given, a block is refined only as far as needed to
+            decide it: the whole-tile bound (core plus every eligible element
+            of the reached tiles), then the disc around the tile centre, then
+            the tile edge; the evaluation stops at the first block whose
+            refined bound still exceeds ``limit``.
+
+    Returns:
+        (n_tiles, n_groups) int64 bounds; with ``limit`` the coarser bounds
+        of the blocks that already fit, and ``-1`` for the blocks not
+        evaluated after an early stop.
+    """
+    from scipy.spatial import cKDTree
+
+    row_pix = np.asarray(row_pix, dtype=np.int64)
+    nside, tnside = int(tiles.nside), int(tiles.tile_nside)
+    out = np.full((tiles.n_tiles, len(groups)), -1, dtype=np.int64)
+    rad_tile = float(hp.max_pixrad(tnside))
+    ring_sorted = row_pix[tiles.rows]  # by tile, ascending inside a tile
+    nest_sorted = hp.ring2nest(nside, ring_sorted)
+    reach_cache: Dict[Tuple[int, float], np.ndarray] = {}
+    for g, (nside_g, _b0, b1) in enumerate(groups):
+        nside_g = int(nside_g)
+        radius = float(binedges[b1])
+        pixel_level = nside_g == nside
+        if pixel_level:
+            pix_g, indptr, offset = nest_sorted, tiles.row_indptr, 0.0
+        else:
+            shift = 2 * (int(np.log2(nside)) - int(np.log2(nside_g)))
+            pix_g = np.unique(nest_sorted >> shift)  # sorted = grouped by tile
+            tile_of = pix_g >> (2 * (int(np.log2(nside_g)) - int(np.log2(tnside))))
+            indptr = np.concatenate(
+                (np.searchsorted(tile_of, tiles.tile_ids), [pix_g.size])
+            ).astype(np.int64)
+            offset = 2.0 * float(hp.max_pixrad(nside_g))
+        vec = np.asarray(hp.pix2vec(nside_g, pix_g, nest=True), dtype=np.float64).T
+        nside_f = min(4 * nside_g, 1 << 29)
+        reach_d = (
+            radius
+            + max(1e-9, search_slack(radius, precision))
+            + offset
+            + float(hp.max_pixrad(nside_f))
+        )
+        cos_pre = float(np.cos(min(rad_tile + reach_d, np.pi)))
+        chord = 2.0 * float(np.sin(min(reach_d, np.pi) / 2.0))
+        for t in range(tiles.n_tiles):
+            a0, a1 = int(indptr[t]), int(indptr[t + 1])
+            key = (t, radius)
+            if key not in reach_cache:
+                reach_cache[key] = tiles.reach(t, radius, precision)
+            near = reach_cache[key]
+            sel = []
+            if pixel_level:
+                lo = int(ring_sorted[a0]) if a1 > a0 else -1
+                for u in near[near != t]:
+                    u0, u1 = int(indptr[u]), int(indptr[u + 1])
+                    k = int(np.searchsorted(ring_sorted[u0:u1], lo, side="right"))
+                    if u0 + k < u1:
+                        sel.append(np.arange(u0 + k, u1))
+            else:
+                for u in near[near > t]:
+                    sel.append(np.arange(int(indptr[u]), int(indptr[u + 1])))
+            cand = np.concatenate(sel) if sel else np.zeros(0, dtype=np.int64)
+            bound = (a1 - a0) + int(cand.size)
+            if (limit is None or bound > limit) and cand.size and reach_d < np.pi:
+                v = vec[cand]
+                v = v[v @ tiles.centre_vec[t] >= cos_pre]
+                # the disc around the tile centre is a bound too: refine
+                # against the edge only when it does not already decide
+                bound = (a1 - a0) + int(v.shape[0])
+                if v.shape[0] and (limit is None or bound > limit):
+                    edge = cKDTree(
+                        _tile_boundary_vec(tnside, tiles.tile_ids[t], nside_f)
+                    )
+                    # threads only pay off for large queries (measured)
+                    d, _ = edge.query(
+                        v,
+                        distance_upper_bound=chord * (1.0 + 1e-12),
+                        workers=-1 if v.shape[0] > _PARALLEL_QUERY else 1,
+                    )
+                    bound = (a1 - a0) + int(np.count_nonzero(np.isfinite(d)))
+            out[t, g] = bound
+            if limit is not None and bound > limit:
+                return out
+    return out
 
 
 @dataclass

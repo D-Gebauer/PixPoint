@@ -29,6 +29,7 @@ tiles and the devices' totals are added in device order, so the result equals
 that of one device up to the summation order of that final add.
 """
 
+import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -36,11 +37,13 @@ import h5py
 import healpy as hp
 import numpy as np
 
+from . import packing as _packing
 from .correlations import Integrated3PCF
 from .global_geometry import (
     LevelElements,
     TileSet,
     default_tile_nside,
+    packed_block_rows_bound,
     radec_to_xyz,
     unique_pairs,
 )
@@ -118,9 +121,14 @@ class Global2PCF:
         nbins, theta_min, theta_max: log-spaced angular bins (arcmin).
         tile_nside: HEALPix resolution of the tiles (power of two, at most
             the coarsest treecode level).  Default: the smallest tiles whose
-            side is still >= ``theta_max``.  With ``pack_pairs=True`` every
-            (tile, level) row block, halo included, must hold <= 65536 rows;
-            pass a larger ``tile_nside`` if it does not.
+            side is still >= ``theta_max``.  With ``pack_pairs=True`` (or
+            ``pack_host_pairs=True``) every (tile, level) row block, halo
+            included, must hold <= 65536 rows: before any pair search a
+            geometric bound on the blocks is checked
+            (:func:`~pixpoint.global_geometry.packed_block_rows_bound`,
+            ``packed_block_rows_bound``), and the default tiles are halved in
+            side (``tile_nside`` doubled) until it fits.  An explicit
+            ``tile_nside`` is kept, with a warning that suggests one that fits.
         device: ``"cpu"``, ``"gpu"``, ``"auto"``, a GPU id, or a list of GPU
             ids.  A list splits the tiles across the devices (contiguous
             ranges with about equal pair counts, ``tile_ranges``); each device
@@ -215,6 +223,11 @@ class Global2PCF:
                 )
             tile_nside = int(min(coarse))
         self.tiles = TileSet.from_rows(e.nside, e.map_inds, int(tile_nside))
+        # packed row blocks: the largest bound when every block fits, else the
+        # bound of the first block found above the limit; None without packing
+        self.packed_block_rows_bound: Optional[int] = None
+        if pack_pairs or pack_host_pairs:
+            self._fit_packed_tiles(auto_tiles, coarse)
         if self.tiles.n_tiles < len(self._engines):
             raise ValueError(
                 f"{self.tiles.n_tiles} tiles cannot be split across "
@@ -298,6 +311,71 @@ class Global2PCF:
         e = self._engine
         levels = {int(ns) for ns in e.level_nside if int(ns) != int(e.nside)}
         return tuple(sorted(levels, reverse=True))
+
+    def _packed_bound(self, tiles: TileSet) -> int:
+        """Largest packed (tile, level) row block bound of ``tiles``; above
+        the packing limit as soon as one block is (early stop)."""
+        e = self._engine
+        bounds = packed_block_rows_bound(
+            tiles,
+            e.map_inds,
+            level_groups(e.level_nside),
+            e.binedges,
+            e.pair_search_precision,
+            limit=_packing.MAX_LOCAL_ROWS,
+        )
+        return int(bounds.max()) if bounds.size else 0
+
+    def _fit_packed_tiles(self, auto_tiles: bool, coarse: Tuple[int, ...]) -> None:
+        """Packed pairs index rows with a uint16 local to their (tile, level)
+        row block, so every block must hold <= ``MAX_LOCAL_ROWS`` rows.
+        Checked before the pair search from a conservative geometric bound
+        (:func:`~pixpoint.global_geometry.packed_block_rows_bound`).
+
+        With automatic tiles, ``tile_nside`` doubles until the bound fits (or
+        the coarsest treecode level / the map resolution is reached).  An
+        explicit ``tile_nside`` is kept; a warning suggests one that fits.
+        The bound is conservative, so a warned configuration may still pack:
+        the exact check in the packing step has the last word.
+        """
+        e = self._engine
+        limit = int(_packing.MAX_LOCAL_ROWS)
+        finest = min(min(coarse), int(e.nside)) if coarse else int(e.nside)
+        bound = self._packed_bound(self.tiles)
+        self.packed_block_rows_bound = bound
+        if bound <= limit:
+            return
+        first_tile, first_bound = self.tile_nside, bound
+        tile, trial = first_tile, self.tiles
+        while bound > limit and tile * 2 <= finest:
+            tile *= 2
+            trial = TileSet.from_rows(e.nside, e.map_inds, tile)
+            bound = self._packed_bound(trial)
+        fits = bound <= limit
+        if auto_tiles:
+            self.tiles = trial
+            self.packed_block_rows_bound = bound
+            if fits:
+                return
+            warnings.warn(
+                f"pair packing: a (tile, level) row block may hold {bound} "
+                f"rows (> {limit}) even at tile_nside={tile}, the finest the "
+                f"treecode allows; find_pairs()/prepare() raise if one really "
+                "does. Use pack_pairs=False (and pack_host_pairs=False).",
+                stacklevel=3,
+            )
+            return
+        hint = (
+            f"pass tile_nside={tile} or leave tile_nside=None"
+            if fits
+            else "use pack_pairs=False"
+        )
+        warnings.warn(
+            f"pair packing: at tile_nside={first_tile} a (tile, level) row block "
+            f"may hold {first_bound} rows (> {limit}); find_pairs()/prepare() "
+            f"raise if one really does: {hint}.",
+            stacklevel=3,
+        )
 
     def _build_treecode(self) -> Optional[TreecodeGeometry]:
         coarse = self._coarse_nsides()

@@ -14,6 +14,9 @@ G4  pair files round-trip bitwise and refuse a different estimator.
 G5  GPU orchestration (tiled and packed kernels) via the numpy twins == CPU.
 G6  pack_host_pairs: the device state is bitwise that of packing in prepare();
     packed pair files (format 2) round-trip, on one device or several.
+G7  packed tiles are sized before the pair search: the geometric bound covers
+    every packed row block; automatic tiles refine until it fits and measure
+    what the default tiling measures; explicit tiles warn, then packing raises.
 """
 
 import os
@@ -21,6 +24,7 @@ import shutil
 import tempfile
 import unittest
 import warnings
+from unittest import mock
 
 import h5py
 import healpy as hp
@@ -29,7 +33,14 @@ import pytest
 
 from pixpoint import Global2PCF, Integrated3PCF, TwoPointResult
 from pixpoint.global_2pcf import FORMAT_VERSION
-from pixpoint.global_geometry import TileSet, radec_to_xyz, search_slack
+from pixpoint.global_geometry import (
+    TileSet,
+    default_tile_nside,
+    packed_block_rows_bound,
+    radec_to_xyz,
+    search_slack,
+)
+from pixpoint.treecode import level_groups
 
 from .test_gpu_kernel_emulation import emulated_gpu
 
@@ -207,6 +218,134 @@ class TestReachMargin(unittest.TestCase):
             r64 = ts.reach(t, radius)
             r32 = ts.reach(t, radius, "float32")
             self.assertTrue(np.isin(r64, r32).all())
+
+
+# a packing limit that the default tiles of the test footprint overflow at
+# the treecode's fine level (exact largest block 213 rows at tile_nside 4),
+# but tile_nside 16 does not (118)
+_SMALL_LIMIT = 200
+_TREE = dict(resolution_factor=2.0)
+
+
+def _packed_global(mask, limit=None, **extra):
+    """Global2PCF with packed pairs (constructed, no pairs yet); ``limit``
+    replaces the uint16 packing limit for construction *and* packing."""
+    kw = _kw(pack_pairs=True, **_TREE)
+    kw.update(extra)
+    if limit is None:
+        return Global2PCF(NSIDE, mask=mask, **kw)
+    with mock.patch("pixpoint.packing.MAX_LOCAL_ROWS", limit):
+        return Global2PCF(NSIDE, mask=mask, **kw)
+
+
+class TestPackedTileChoice(unittest.TestCase):
+    """G7: the packed row blocks are sized before the pair search."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mask, cls.shear, cls.w, cls.dens = _setup()
+        cls.default_tile = default_tile_nside(NSIDE, np.radians(BINS["theta_max"] / 60))
+
+    def test_bound_covers_every_packed_block(self):
+        """The geometric bound is never below the block packing builds, for
+        any tiling, with and without treecode, at both search precisions."""
+        for precision in ("float64", "float32"):
+            for tree in ({}, _TREE):
+                for tile_nside in (2, 4, 8, 16):
+                    with self.subTest(precision=precision, tree=tree, tile=tile_nside):
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            g = Global2PCF(
+                                NSIDE,
+                                mask=self.mask,
+                                tile_nside=tile_nside,
+                                **_kw(
+                                    pack_host_pairs=True,
+                                    pair_search_precision=precision,
+                                    **tree,
+                                ),
+                            )
+                        e = g._engine
+                        bound = packed_block_rows_bound(
+                            g.tiles,
+                            e.map_inds,
+                            level_groups(e.level_nside),
+                            e.binedges,
+                            precision,
+                        )
+                        g.find_pairs()
+                        exact = np.array([np.asarray(s) for s in e.packed_block_sizes])
+                        self.assertEqual(bound.shape, exact.shape)
+                        self.assertTrue((bound >= exact).all())
+                        # and it is tight enough to choose tiles with
+                        self.assertLessEqual(bound.max(), 1.25 * exact.max())
+
+    def test_bound_with_limit_stops_early(self):
+        g = _packed_global(self.mask)
+        e = g._engine
+        args = (g.tiles, e.map_inds, level_groups(e.level_nside), e.binedges)
+        full = packed_block_rows_bound(*args)
+        stopped = packed_block_rows_bound(*args, limit=int(full.max()) - 1)
+        self.assertGreater(stopped.max(), full.max() - 1)
+        self.assertTrue((stopped == -1).any())
+        # entries that were evaluated are upper bounds of the refined ones
+        seen = stopped >= 0
+        self.assertTrue((stopped[seen] >= full[seen]).all())
+
+    def test_fitting_configuration_keeps_default_tiles(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            g = _packed_global(self.mask)
+        self.assertEqual(g.tile_nside, self.default_tile)
+        self.assertLessEqual(g.packed_block_rows_bound, 65536)
+
+    def test_no_check_without_packing(self):
+        g = Global2PCF(NSIDE, mask=self.mask, **_kw(**_TREE))
+        self.assertIsNone(g.packed_block_rows_bound)
+        self.assertEqual(g.tile_nside, self.default_tile)
+
+    def test_explicit_tiles_that_overflow_still_raise_in_packing(self):
+        """Without the automatic choice the default tiling really overflows
+        (so the test limit is meaningful): a warning first, then the exact
+        check of the packing step."""
+        with mock.patch("pixpoint.packing.MAX_LOCAL_ROWS", _SMALL_LIMIT):
+            with self.assertWarnsRegex(UserWarning, "tile_nside=16"):
+                g = _packed_global(
+                    self.mask, tile_nside=self.default_tile, pack_host_pairs=True
+                )
+            self.assertEqual(g.tile_nside, self.default_tile)
+            with self.assertRaisesRegex(ValueError, "pair packing needs"):
+                g.find_pairs()
+
+    def test_automatic_tiles_refine_until_blocks_fit(self):
+        """tile_nside=None doubles the tiles until the bound fits; the pairs
+        then pack (prepare() and pack_host_pairs alike) and measure what the
+        default tiling measures without the limit (tile invariance)."""
+        ref = _packed_global(self.mask)
+        ref.preprocess()
+        want = _measure_all(ref, self.shear, self.w, self.dens)
+        for host in (False, True):
+            with self.subTest(pack_host_pairs=host):
+                with mock.patch("pixpoint.packing.MAX_LOCAL_ROWS", _SMALL_LIMIT):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("error")
+                        g = _packed_global(self.mask, pack_host_pairs=host)
+                    self.assertEqual(g.tile_nside, 16)
+                    self.assertLessEqual(g.packed_block_rows_bound, _SMALL_LIMIT)
+                    g.preprocess()
+                got = _measure_all(g, self.shear, self.w, self.dens)
+                self.assertEqual(g.ntotpairs, ref.ntotpairs)
+                for a, b in zip(got, want):
+                    for name in a.num:
+                        self.assertLess(_rel(a.num[name], b.num[name]), 1e-12)
+                    self.assertLess(_rel(a.weight, b.weight), 1e-12)
+
+    def test_automatic_tiles_warn_when_nothing_fits(self):
+        with self.assertWarnsRegex(UserWarning, "pack_pairs=False"):
+            g = _packed_global(self.mask, limit=10)
+        coarse = {int(n) for n in g.level_table["nside"]} - {NSIDE}
+        self.assertEqual(g.tile_nside, min(coarse))
+        self.assertGreater(g.packed_block_rows_bound, 10)
 
 
 class TestResultsAndInputs(unittest.TestCase):
